@@ -1,8 +1,10 @@
 // Tela do Estúdio: desenha o estado e repassa os eventos ao núcleo.
 import * as n from './nucleo.mjs';
+import { criarPonteFalsa, PEDIDO_DO_ROTEIRO } from './roteiro.mjs';
 
 const $ = (id) => document.getElementById(id);
-const ponte = window.estudio; // ausente quando a tela é aberta direto no navegador
+const ponteReal = window.estudio; // ausente quando a tela é aberta direto no navegador
+let ponte = ponteReal; // no roteiro falso (R31), a ponte falsa toma o lugar da real
 const esperar = (ms) => new Promise((r) => setTimeout(r, ms));
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const hora = (t) => new Date(t).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
@@ -13,6 +15,8 @@ let agentes = salvo('agentes', n.TIME_PADRAO);
 let conversas = salvo('conversas', []);
 let atual = conversas[0] ?? n.novaConversa();
 let pasta = salvo('pasta', null); // null = pasta padrão (~/estudio-projetos)
+let roteiro = salvo('roteiro', false);
+let pendente = salvo('pendente', null); // R35: { id, conversa } da rodada que espera Manter/Descartar
 let pastaPadrao = '';
 
 // ---------- estado da tela ----------
@@ -22,12 +26,15 @@ let ocupado = false;
 let provedores = { modos: {}, chaves: [] };
 const baloes = new Map();
 const saidas = new Map(); // comando executado -> saída
+let confirmando = null; // id da foto cujo Descartar espera o segundo clique
 
 function persistir() {
   conversas = [atual, ...conversas.filter((c) => c.id !== atual.id)].filter((c) => c.mensagens.length).slice(0, 30);
   localStorage.setItem('conversas', JSON.stringify(conversas));
   localStorage.setItem('agentes', JSON.stringify(agentes));
   localStorage.setItem('pasta', JSON.stringify(pasta));
+  localStorage.setItem('roteiro', JSON.stringify(roteiro));
+  localStorage.setItem('pendente', JSON.stringify(pendente));
 }
 
 // ---------- mascotes (SVG) ----------
@@ -78,7 +85,7 @@ const ROTULO_ESTADO = { disponivel: 'Disponível', pensando: 'Pensando', trabalh
 // ---------- desenho ----------
 function desenharPalco() {
   $('palco').innerHTML = agentes.map((a) => `
-    <button class="agente ${destino === a.id ? 'selecionado' : ''}" data-id="${a.id}" data-estado="${estados[a.id] ?? 'disponivel'}" style="--cor:${a.cor}" title="${esc(a.papel)} · ${a.provedor}${a.coordenador ? '' : ' · botão direito remove'}">
+    <button class="agente ${destino === a.id ? 'selecionado' : ''}" data-id="${a.id}" data-estado="${estados[a.id] ?? 'disponivel'}" style="--cor:${a.cor}" title="${esc(a.papel)} · ${a.provedor}${a.modelo ? ' · ' + esc(a.modelo) : ''} · duplo clique: provedor e modelo${a.coordenador ? '' : ' · botão direito remove'}">
       ${baloes.has(a.id) ? `<div class="balao">${esc(baloes.get(a.id))}</div>` : ''}
       ${mascote(a)}
       <span class="nome">${esc(a.nome)}</span><span class="papel">${esc(a.papel)}</span>
@@ -88,7 +95,10 @@ function desenharPalco() {
   const usados = [...new Set(agentes.map((a) => a.provedor))];
   const faltando = usados.filter((p) => !provedores.modos[p]);
   const ROTULO = { api: 'API', cli: 'CLI' };
-  if (!ponte) {
+  if (roteiro) {
+    $('modo').textContent = '🎬 roteiro falso · nenhum modelo é chamado, nada vai para o disco';
+    $('modo').title = 'Repete a Demo 1 com falas prontas. Clique em 🎬 para voltar aos agentes de verdade.';
+  } else if (!ponte) {
     $('modo').textContent = 'abra pelo app (npm start)';
   } else if (provedores.gratuito) {
     $('modo').textContent = faltando.length
@@ -97,11 +107,13 @@ function desenharPalco() {
     $('modo').title = 'MODO_GRATUITO=true no .env: todos usam o Gemini grátis; chaves pagas e CLIs são ignoradas';
   } else {
     $('modo').textContent = usados.map((p) => `${p}: ${ROTULO[provedores.modos[p]] ?? 'sem acesso'}`).join(' · ');
-    $('modo').title = 'API = chave no .env · CLI = login da assinatura na linha de comando';
+    $('modo').title = 'API = chave salva em 🔑 ou no .env · CLI = login da assinatura na linha de comando';
   }
-  $('modo').classList.toggle('alerta', !ponte || faltando.length > 0);
+  $('modo').classList.toggle('alerta', !roteiro && (!ponte || faltando.length > 0));
+  $('modo').classList.toggle('roteiro', roteiro);
+  $('btn-roteiro').classList.toggle('ativo', roteiro);
   $('modo').classList.toggle('gratis', Boolean(ponte && provedores.gratuito && !faltando.length));
-  $('nome-projeto').textContent = pasta ? pasta.split(/[\\/]/).pop() : 'estudio-projetos (padrão)';
+  $('nome-projeto').textContent = roteiro ? 'roteiro falso' : pasta ? pasta.split(/[\\/]/).pop() : 'estudio-projetos (padrão)';
   $('btn-projeto').title = `${pasta || pastaPadrao}\nClique para escolher outra pasta`;
 }
 
@@ -112,7 +124,7 @@ function desenharChips() {
     agentes.map((a) => chip(a.id, a.nome, a.cor, estados[a.id] === 'trabalhando' ? ' •' : '')).join('');
   const alvo = agentes.find((a) => a.id === destino);
   $('destino-dica').textContent = alvo ? `Só ${alvo.nome} responde` : 'O time decide quem responde';
-  $('entrada').placeholder = alvo ? `Fale com ${alvo.nome}...` : 'Fale com o time...';
+  $('entrada').placeholder = alvo ? `Fale com ${alvo.nome}...` : roteiro ? `Enter vazio usa: ${PEDIDO_DO_ROTEIRO}` : 'Fale com o time...';
 }
 
 function formatar(texto) {
@@ -149,6 +161,20 @@ function desenharMensagens() {
           <div class="barra"><span style="width:${p.confianca}%"></span></div><p>${esc(p.fala)}</p></div>`;
       }).join('')}</div>`;
     }
+    if (m.tipo === 'portao') {
+      const ok = ['passou', 'pulou', 'desligado'].includes(m.situacao);
+      const tempo = m.ms ? ` em ${(m.ms / 1000).toFixed(1)} s` : '';
+      const cmd = m.comando ? ` <code>${esc(m.comando)}</code>` : '';
+      const origem = m.origem ? `<small> (${esc(m.origem)})</small>` : '';
+      const det = m.resumo || m.detalhe
+        ? `<details><summary>saída</summary><pre>${esc(m.resumo || '')}</pre>${m.detalhe && m.detalhe !== m.resumo ? `<details><summary>saída completa</summary><pre>${esc(m.detalhe)}</pre></details>` : ''}</details>` : '';
+      const caixa = m.isolado === true ? `<p class="isolamento">🔒 isolado: só a pasta do projeto${m.rede ? '' : ', sem rede'}, sem chaves</p>`
+        : m.isolado === false ? '<p class="isolamento aberta">⚠ rodou SEM isolamento (PORTAO_ISOLAMENTO=desligado)</p>' : '';
+      const motivo = m.motivo ? `<p class="isolamento aberta">${esc(m.motivo)}</p>` : '';
+      return `<div class="rodada portao ${ok ? 'passou' : 'falhou'}"><h3>Portão de testes · rodada ${m.rodada}</h3>
+        <p><b>${ROTULO_PORTAO[m.situacao] ?? esc(m.situacao)}</b>${cmd}${origem}${tempo}</p>${caixa}${motivo}${det}</div>`;
+    }
+    if (m.tipo === 'decisao') return desenharDecisao(m);
     if (m.tipo === 'arquivos') {
       return `<div class="rodada arquivos"><h3>Arquivos criados ou alterados</h3>${m.arquivos.length
         ? m.arquivos.map((f) => `<button data-abrir="${esc(f)}">📄 ${esc(f)}</button>`).join('')
@@ -167,6 +193,80 @@ function desenharMensagens() {
   $('titulo-conversa').textContent = atual.titulo;
 }
 
+// ---------- R35: card da decisão (passo 5) ----------
+const SINAL = { criado: '+', alterado: '~', removido: '−' };
+
+function linhasDoDiff(texto) {
+  return texto.split('\n').map((l) => {
+    const c = l.startsWith('@@') ? 'trecho' : l[0] === '+' ? 'mais' : l[0] === '-' ? 'menos' : '';
+    return `<span class="${c}">${esc(l) || ' '}</span>`;
+  }).join(''); // cada linha é um bloco: sem \n entre elas
+}
+
+function desenharDecisao(m) {
+  if (m.estado === 'nada') {
+    return '<div class="rodada decisao"><h3>Decisão</h3><p>Nada mudou na pasta do projeto.</p><button data-abrir="" class="pasta">📁 Abrir a pasta</button></div>';
+  }
+  const conta = (lista, um, varios) => (lista.length ? `${lista.length} ${lista.length > 1 ? varios : um}` : '');
+  const placar = [conta(m.criados, 'criado', 'criados'), conta(m.alterados, 'alterado', 'alterados'), conta(m.removidos, 'removido', 'removidos')].filter(Boolean).join(' · ');
+  const arquivos = m.diffs.map((d) => `<details class="diff-arquivo ${d.tipo}"><summary><b>${SINAL[d.tipo]}</b> ${esc(d.caminho)} <small>${d.mais ? `+${d.mais}` : ''} ${d.menos ? `−${d.menos}` : ''}</small>${d.tipo !== 'removido' ? `<button type="button" data-abrir="${esc(d.caminho)}" title="Abrir">↗</button>` : ''}</summary>
+    ${d.texto ? `<pre class="diff">${linhasDoDiff(d.texto)}</pre>` : '<p class="nota">Binário ou grande demais para mostrar aqui.</p>'}</details>`).join('');
+  const grandes = m.grandesNovos?.length ? `<p class="nota">⚠ Fora da foto (mais de 2 MB), o Descartar não mexe: ${m.grandesNovos.map(esc).join(', ')}</p>` : '';
+  const ativa = m.estado === 'pendente' && pendente?.id === m.foto;
+  let acoes;
+  if (m.estado === 'mantido') acoes = `<p class="veredito ok">✓ Mantido${m.automatico ? ' (um novo pedido chegou antes da decisão)' : ''}.</p>`;
+  else if (m.estado === 'descartado') acoes = `<p class="veredito">↩ Descartado: a pasta voltou a como estava antes do pedido (${m.resultado.apagados.length} apagado(s), ${m.resultado.restaurados.length} restaurado(s)).</p>`;
+  else if (!ativa) acoes = '<p class="nota">Esta decisão não está mais disponível.</p>';
+  else if (confirmando === m.foto) {
+    acoes = `<p class="aviso-descarte">Descartar apaga ${m.criados.length} arquivo(s) criado(s) e devolve ${m.alterados.length + m.removidos.length} ao estado de antes do pedido. Não dá para desfazer.</p>
+      <div class="botoes"><button type="button" class="perigo" data-decidir="descartar">Sim, descartar</button><button type="button" data-decidir="cancelar">Cancelar</button></div>`;
+  } else {
+    acoes = `<div class="botoes"><button type="button" class="primario" data-decidir="manter" ${ocupado ? 'disabled' : ''}>Manter</button><button type="button" data-decidir="confirmar" ${ocupado ? 'disabled' : ''}>Descartar</button></div>`;
+  }
+  return `<div class="rodada decisao ${m.estado}"><h3>Decisão · o que mudou na pasta</h3><p class="placar">${placar}</p>${arquivos}${grandes}${acoes}
+    <button data-abrir="" class="pasta">📁 Abrir a pasta</button></div>`;
+}
+
+function marcarDecisao(id, mudanca) {
+  const mexer = (c) => ({ ...c, mensagens: c.mensagens.map((m) => (m.tipo === 'decisao' && m.foto === id ? { ...m, ...mudanca } : m)) });
+  atual = mexer(atual);
+  conversas = conversas.map(mexer);
+}
+
+// Manter apaga a foto; Descartar devolve a pasta ao que era antes do pedido.
+async function decidir(acao, { automatico = false } = {}) {
+  const p = pendente;
+  if (!p || !ponte) return;
+  if (acao === 'descartar') {
+    const r = await ponte.descartarFoto({ id: p.id, pasta });
+    if (r.erro) { postar({ autor: 'sistema', texto: `Não deu para descartar: ${r.erro}`, erro: true }); return; }
+    marcarDecisao(p.id, { estado: 'descartado', resultado: r });
+  } else {
+    await ponte.manterFoto({ id: p.id });
+    marcarDecisao(p.id, { estado: 'mantido', automatico });
+  }
+  pendente = null; confirmando = null;
+  persistir(); desenharMensagens();
+}
+
+// Fim da rodada: compara a pasta com a foto e abre a decisão. Sem foto, só lista os arquivos (como antes).
+async function fecharRodada(foto, inicio) {
+  marcarPasso('decisao');
+  const d = foto ? await ponte.diffFoto({ id: foto, pasta }) : null;
+  if (!d || d.erro) {
+    if (d?.erro) postar({ autor: 'sistema', texto: `Sem diff desta rodada: ${d.erro}`, erro: true });
+    postar({ autor: 'sistema', tipo: 'arquivos', arquivos: await ponte.arquivosAlterados({ pasta, desde: inicio }) });
+    return;
+  }
+  if (!n.totalDeMudancas(d)) {
+    await ponte.manterFoto({ id: foto });
+    postar({ autor: 'sistema', tipo: 'decisao', estado: 'nada' });
+    return;
+  }
+  pendente = { id: foto, conversa: atual.id };
+  postar({ autor: 'sistema', tipo: 'decisao', foto, estado: 'pendente', ...d });
+}
+
 function desenharTrabalhando() {
   const ativos = agentes.filter((a) => estados[a.id] === 'trabalhando');
   const el = $('trabalhando');
@@ -177,6 +277,16 @@ function desenharTrabalhando() {
 function desenhar() {
   desenharPalco(); desenharChips(); desenharMensagens(); desenharTrabalhando();
   $('compositor').querySelector('.enviar').disabled = ocupado;
+}
+
+// Os cinco passos da Demo 1 (Aula 16): Pedido, Plano, Execução, Testes, Decisão.
+function marcarPasso(passo) {
+  const ordem = [...$('passos').children].map((li) => li.dataset.passo);
+  const i = ordem.indexOf(passo);
+  [...$('passos').children].forEach((li, j) => {
+    li.classList.toggle('atual', j === i);
+    li.classList.toggle('feito', i >= 0 && j < i);
+  });
 }
 
 function mudarEstado(id, novo) {
@@ -201,31 +311,88 @@ async function executar(agente, pedido, anteriores) {
   mudarEstado(agente.id, 'trabalhando');
   const modo = provedores.modos[agente.provedor] ?? 'cli';
   const prompt = n.montarPrompt(agente, pedido, anteriores, { modo });
-  const r = await ponte.executarAgente({ provedor: agente.provedor, prompt, pasta, escrita: n.podeEscrever(agente) });
+  const r = await ponte.executarAgente({ agente: agente.id, provedor: agente.provedor, modelo: agente.modelo, prompt, pasta, escrita: n.podeEscrever(agente) });
   const erro = !r.ok || !r.saida;
   const texto = erro
     ? `${agente.provedor} falhou: ${(r.erro || r.saida || 'sem resposta').trim().split('\n').slice(-3).join('\n')}`
     : r.saida;
   postar({ autor: agente.id, texto, erro, gratis: r.modo === 'gratis', modelo: r.modelo });
-  falar(agente.id, texto.split('\n')[0].slice(0, 90));
+  const fala = texto.replace(/```[\s\S]*?```/g, '').replace(/[`*]/g, '').split('\n').map((l) => l.trim()).find(Boolean) ?? texto;
+  falar(agente.id, fala.slice(0, 90));
   mudarEstado(agente.id, 'concluido');
-  return { nome: agente.nome, papel: agente.papel, texto };
+  return { id: agente.id, nome: agente.nome, papel: agente.papel, texto, gravados: r.gravados ?? [] };
+}
+
+// ---------- portão de testes (R24–R28) ----------
+const ROTULO_PORTAO = {
+  passou: '✓ passou', falhou: '✕ falhou', tempo: '✕ tempo esgotado', 'sem-teste': '✕ sem teste',
+  bloqueado: '⚠ precisa da sua aprovação', pulou: 'pulou: nada mudou', desligado: 'desligado no .env',
+  'sem-isolamento': '⚠ não rodou: sem caixa de areia',
+};
+
+// Roda a etapa de execução e, enquanto o portão reprovar, devolve o trabalho para quem fez.
+async function executarComPortao(etapa, pedido, anteriores) {
+  const inicio = Date.now() - 1000;
+  const autoria = {};
+  const anotar = (rs) => rs.forEach((r) => r.gravados.forEach((c) => { autoria[c] = r.id; }));
+  const executores = etapa.filter((id) => n.podeEscrever(agentes.find((a) => a.id === id)));
+  let resultados = await Promise.all(etapa.map((id) => executar(agentes.find((a) => a.id === id), pedido, anteriores)));
+  anteriores.push(...resultados); anotar(resultados);
+  if (!executores.length) return null;
+  for (let rodada = 1; ; rodada++) {
+    marcarPasso('testes');
+    const alterados = await ponte.arquivosAlterados({ pasta, desde: inicio });
+    const el = $('trabalhando'); el.hidden = false; el.textContent = 'Portão de testes rodando…';
+    const p = await ponte.portao({ pasta, houveMudanca: alterados.length > 0 });
+    el.hidden = true;
+    const decisao = n.decidirPortao(p.situacao, rodada);
+    postar({ autor: 'sistema', tipo: 'portao', ...p, rodada, decisao, saida: undefined, detalhe: p.saida });
+    if (p.situacao === 'bloqueado') {
+      postar({ autor: 'sistema', texto: `O "test" do package.json parece perigoso e não rodou sozinho:\n\`${p.script}\`\nLeia antes de aprovar:\n\`\`\`bash\n${p.comando}\n\`\`\`` });
+    }
+    if (decisao === 'seguir') {
+      if (p.situacao === 'passou') anteriores.push({ nome: 'Portão de testes', papel: 'testes automáticos', texto: `APROVADO: \`${p.comando}\` passou.\n${p.resumo || ''}` });
+      return p;
+    }
+    if (decisao === 'desistir') {
+      postar({ autor: 'sistema', texto: `O portão não aprovou depois de ${n.MAX_DEVOLUCOES} devoluções. O Revisor vai olhar mesmo assim, sabendo disso.`, erro: true });
+      anteriores.push({ nome: 'Portão de testes', papel: 'testes automáticos', texto: `NÃO APROVADO depois de ${n.MAX_DEVOLUCOES} devoluções.\n${p.resumo || ''}` });
+      return p;
+    }
+    const falha = n.falhaDoPortao(p, rodada);
+    const corretores = n.quemCorrige(p.resumo, autoria, executores);
+    const nomes = corretores.map((id) => agentes.find((a) => a.id === id)?.nome).join(' e ');
+    const maestro = agentes.find((a) => a.coordenador);
+    if (maestro) { postar({ autor: maestro.id, texto: `Voltou para ${nomes}: ${ROTULO_PORTAO[p.situacao]}.` }); falar(maestro.id, `Voltou para ${nomes}.`); }
+    marcarPasso('execucao');
+    resultados = await Promise.all(corretores.map((id) => executar(agentes.find((a) => a.id === id), pedido, [...anteriores, falha])));
+    anteriores.push(...resultados); anotar(resultados);
+  }
 }
 
 async function enviar(pedido) {
   ocupado = true;
+  if (roteiro) ponte = criarPonteFalsa({ agentes }); // cada pedido recomeça o roteiro do zero
+  marcarPasso('pedido');
   postar({ autor: 'voce', texto: pedido });
   const inicio = Date.now() - 1000;
+  let foto = null;
   try {
     if (!ponte) throw new Error('Os agentes só rodam no app desktop (npm start).');
     provedores = await ponte.provedores(); // o .env pode ter mudado
     desenharPalco();
+    if (pendente) await decidir('manter', { automatico: true }); // a foto nova já inclui o que ficou
+    const f = await ponte.tirarFoto({ pasta });
+    if (f.erro) postar({ autor: 'sistema', texto: `Sem foto da pasta (${f.erro}): nesta rodada não vai dar para descartar.`, erro: true });
+    else foto = f.id;
     const alvo = agentes.find((a) => a.id === destino);
     if (alvo) {
+      marcarPasso('execucao');
       await executar(alvo, pedido, []);
     } else {
       // rodada de propostas: todos pensam, cada um diz se pega ou passa
       const maestro = agentes.find((a) => a.coordenador);
+      marcarPasso('plano');
       agentes.forEach((a) => { estados[a.id] = 'pensando'; });
       desenharPalco();
       await esperar(700);
@@ -238,14 +405,19 @@ async function enviar(pedido) {
       if (maestro) { postar({ autor: maestro.id, texto: mensagem, time: etapas.flat() }); falar(maestro.id, mensagem); }
       const anteriores = [];
       for (const etapa of etapas) {
+        const executa = etapa.some((id) => n.podeEscrever(agentes.find((a) => a.id === id)));
+        const revisa = etapa.every((id) => agentes.find((a) => a.id === id)?.papel === 'Revisão de código');
+        marcarPasso(revisa ? 'testes' : 'execucao'); // o revisor confere: é verificação, não execução
+        if (executa) { await executarComPortao(etapa, pedido, anteriores); continue; }
         const resultados = await Promise.all(etapa.map((id) => executar(agentes.find((a) => a.id === id), pedido, anteriores)));
         anteriores.push(...resultados);
       }
     }
-    const arquivos = await ponte.arquivosAlterados({ pasta, desde: inicio });
-    postar({ autor: 'sistema', tipo: 'arquivos', arquivos });
+    await fecharRodada(foto, inicio);
   } catch (e) {
+    marcarPasso(null);
     postar({ autor: 'sistema', texto: `Erro: ${e.message}`, erro: true });
+    if (foto && !pendente) await fecharRodada(foto, inicio).catch(() => {}); // o que já mudou também pode ser descartado
   } finally {
     ocupado = false;
     await esperar(2500);
@@ -257,7 +429,7 @@ async function enviar(pedido) {
 // ---------- eventos ----------
 $('compositor').addEventListener('submit', (ev) => {
   ev.preventDefault();
-  const texto = $('entrada').value.trim();
+  const texto = $('entrada').value.trim() || (roteiro && destino === 'time' ? PEDIDO_DO_ROTEIRO : '');
   if (!texto || ocupado) return;
   $('entrada').value = '';
   $('entrada').style.height = '';
@@ -289,7 +461,19 @@ $('palco').addEventListener('contextmenu', (ev) => {
 });
 
 $('mensagens').addEventListener('click', async (ev) => {
+  const dec = ev.target.closest('[data-decidir]');
+  if (dec) {
+    ev.preventDefault();
+    if (ocupado || !pendente) return;
+    const acao = dec.dataset.decidir;
+    if (acao === 'confirmar') { confirmando = pendente.id; desenharMensagens(); return; }
+    if (acao === 'cancelar') { confirmando = null; desenharMensagens(); return; }
+    dec.disabled = true;
+    await decidir(acao);
+    return;
+  }
   const abrir = ev.target.closest('[data-abrir]');
+  if (abrir) ev.preventDefault(); // o ↗ fica dentro do <summary>: não abre/fecha o diff
   if (abrir && ponte) {
     const falha = await ponte.abrir({ pasta, caminho: abrir.dataset.abrir });
     if (falha) postar({ autor: 'sistema', texto: `Não abriu: ${falha}`, erro: true });
@@ -310,6 +494,17 @@ $('btn-projeto').addEventListener('click', async () => {
   if (!ponte) return;
   const p = await ponte.escolherPasta();
   if (p) { pasta = p; persistir(); desenharPalco(); }
+});
+
+// R31: liga e desliga o roteiro falso. A troca vale a partir do próximo pedido.
+$('btn-roteiro').addEventListener('click', async () => {
+  if (ocupado) return;
+  if (pendente) await decidir('manter', { automatico: true }); // a foto pendente é da ponte que vai sair
+  roteiro = !roteiro;
+  ponte = roteiro ? criarPonteFalsa({ agentes }) : ponteReal;
+  provedores = ponte ? await ponte.provedores() : { modos: {}, chaves: [] };
+  marcarPasso(null);
+  persistir(); desenhar(); $('entrada').focus();
 });
 
 $('btn-nova-conversa').addEventListener('click', () => {
@@ -344,7 +539,157 @@ $('form-agente').addEventListener('submit', (ev) => {
   }
 });
 
+// ---------- provedores nos formulários (R19) ----------
+document.querySelectorAll('.sel-provedor').forEach((sel) => {
+  sel.innerHTML = n.PROVEDORES.map((p) => `<option value="${p}">${esc(n.CATALOGO[p].rotulo)}</option>`).join('');
+});
+
+// ---------- painel de chaves (R20–R22) ----------
+const ROTULO_FONTE = { tela: 'chave salva aqui', '.env': 'chave do .env' };
+
+function seloAcesso(p) {
+  if (p.modo === 'gratis') return '<span class="selo-acesso ok">modo gratuito</span>';
+  if (!p.usaChave) return '<span class="selo-acesso ok">local, sem chave</span>';
+  if (p.mascara) return `<span class="selo-acesso ok" title="${esc(p.variavel)}">${esc(ROTULO_FONTE[p.fonte])} · ${esc(p.mascara)}</span>`;
+  if (p.cli) return '<span class="selo-acesso cli">CLI da assinatura</span>';
+  return '<span class="selo-acesso">sem acesso</span>';
+}
+
+async function desenharChaves() {
+  const dados = await ponteReal.chaves();
+  $('cofre-situacao').textContent = dados.cofre.disponivel
+    ? 'As chaves digitadas aqui ficam cifradas no cofre do sistema e valem mais que as do .env. A tela nunca mostra a chave inteira.'
+    : `⚠ ${dados.cofre.motivo}`;
+  $('lista-chaves').innerHTML = dados.provedores.map((p) => `
+    <div class="prov" data-prov="${p.id}">
+      <div class="prov-topo"><b>${esc(p.rotulo)}</b>${seloAcesso(p)}<a href="#" data-site="${esc(p.site)}" title="${esc(p.site)}">obter chave ↗</a></div>
+      ${p.usaChave ? `<div class="prov-linha">
+        <input type="password" class="chave" placeholder="${p.temNaTela ? 'trocar a chave salva' : `colar ${esc(p.variavel)}`}" autocomplete="off" spellcheck="false" ${dados.cofre.disponivel ? '' : 'disabled'}>
+        <button type="button" data-acao="salvar" ${dados.cofre.disponivel ? '' : 'disabled'}>Salvar</button>
+        ${p.temNaTela ? '<button type="button" data-acao="remover">Remover</button>' : ''}
+      </div>` : ''}
+      <div class="prov-linha">
+        <input class="modelo" placeholder="${esc(p.modeloPadrao)}" title="Modelo para o teste (vazio = ${esc(p.modeloPadrao)})" spellcheck="false">
+        <button type="button" data-acao="testar">Testar</button>
+      </div>
+      <p class="resultado"></p>
+    </div>`).join('');
+}
+
+function mostrar(alvo, classe, texto) {
+  alvo.className = `resultado ${classe}`;
+  alvo.textContent = texto;
+}
+
+$('btn-chaves').addEventListener('click', async () => {
+  if (!ponteReal) return;
+  await desenharChaves();
+  $('dlg-chaves').showModal();
+});
+
+$('dlg-chaves').addEventListener('close', async () => { provedores = await ponte.provedores(); desenharPalco(); });
+
+$('lista-chaves').addEventListener('click', async (ev) => {
+  const site = ev.target.closest('[data-site]');
+  if (site) { ev.preventDefault(); return; } // a página não abre links externos; o endereço fica no title
+  const b = ev.target.closest('[data-acao]');
+  const linha = b?.closest('[data-prov]');
+  if (!linha) return;
+  const provedor = linha.dataset.prov;
+  const res = linha.querySelector('.resultado');
+  b.disabled = true;
+  try {
+    if (b.dataset.acao === 'salvar') {
+      const entrada = linha.querySelector('.chave');
+      const r = await ponteReal.salvarChave({ provedor, chave: entrada.value });
+      entrada.value = ''; // a chave não fica na tela
+      if (!r.ok) { mostrar(res, 'falhou', r.erro); return; }
+      await desenharChaves();
+      mostrar($('lista-chaves').querySelector(`[data-prov="${provedor}"] .resultado`), r.aviso ? 'aviso' : 'ok', r.aviso || 'Chave salva. Clique em Testar para conferir.');
+      provedores = await ponte.provedores(); desenharPalco();
+    } else if (b.dataset.acao === 'remover') {
+      await ponteReal.removerChave({ provedor });
+      await desenharChaves();
+      provedores = await ponte.provedores(); desenharPalco();
+    } else if (b.dataset.acao === 'testar') {
+      mostrar(res, '', 'Testando…');
+      const r = await ponteReal.testarProvedor({ provedor, modelo: linha.querySelector('.modelo').value });
+      if (!r.ok) mostrar(res, 'falhou', `✕ ${r.modelo ?? ''}: ${r.erro}`);
+      else if (r.aviso) mostrar(res, 'aviso', `✓ ${r.aviso}`);
+      else mostrar(res, 'ok', `✓ ${r.modelo} respondeu em ${r.ms} ms (${ROTULO_FONTE[r.fonte] ?? r.fonte})`);
+    }
+  } finally {
+    if (b.isConnected) b.disabled = false;
+  }
+});
+
+// ---------- cartão do agente: provedor e modelo (R23) ----------
+let editando = null;
+
+function acessoDoAgente(provedor) {
+  const modo = provedores.modos?.[provedor];
+  if (provedores.gratuito) return 'Modo gratuito ligado: este agente roda no Gemini grátis, qualquer que seja o provedor.';
+  return { api: 'Acesso: chave de API.', cli: 'Acesso: CLI da assinatura.' }[modo]
+    ?? `Sem acesso: salve uma chave em 🔑${n.CATALOGO[provedor]?.cli ? ` ou instale e faça login na CLI "${n.CATALOGO[provedor].cli}"` : ''}.`;
+}
+
+$('palco').addEventListener('dblclick', async (ev) => {
+  const b = ev.target.closest('.agente');
+  const a = b && agentes.find((x) => x.id === b.dataset.id);
+  if (!a || ocupado) return;
+  editando = a.id;
+  if (ponte) { provedores = await ponte.provedores(); desenharPalco(); } // chaves podem ter mudado (.env ou 🔑)
+  const f = $('form-editar');
+  $('editar-titulo').textContent = a.nome;
+  $('editar-papel').textContent = `${a.papel}${a.coordenador ? ' · só responde quando você fala direto com ele' : ''}`;
+  f.provedor.value = a.provedor;
+  f.modelo.value = a.modelo ?? '';
+  f.modelo.placeholder = n.CATALOGO[a.provedor]?.modelo ?? '';
+  $('editar-acesso').textContent = acessoDoAgente(a.provedor);
+  mostrar($('editar-resultado'), '', '');
+  $('dlg-editar').showModal();
+});
+
+$('form-editar').provedor.addEventListener('change', (ev) => {
+  $('form-editar').modelo.placeholder = n.CATALOGO[ev.target.value]?.modelo ?? '';
+  $('editar-acesso').textContent = acessoDoAgente(ev.target.value);
+});
+
+$('form-editar').addEventListener('submit', (ev) => {
+  if (ev.submitter?.value !== 'salvar') return;
+  try {
+    agentes = n.editarAgente(agentes, editando, Object.fromEntries(new FormData(ev.target)));
+    persistir(); desenhar();
+  } catch (e) {
+    ev.preventDefault();
+    mostrar($('editar-resultado'), 'falhou', e.message);
+  }
+});
+
+// Chamada de verdade pelo mesmo caminho dos pedidos: confere login, crédito e modelo.
+$('btn-testar-agente').addEventListener('click', async (ev) => {
+  const f = $('form-editar');
+  const a = agentes.find((x) => x.id === editando);
+  if (!a || !ponteReal) return;
+  ev.target.disabled = true;
+  mostrar($('editar-resultado'), '', 'Chamando o agente…');
+  const inicio = Date.now();
+  try {
+    provedores = await ponte.provedores();
+    const r = await ponteReal.executarAgente({
+      provedor: f.provedor.value, modelo: f.modelo.value, pasta, escrita: false,
+      prompt: `Você é ${a.nome}, agente de ${a.papel}. Responda apenas: "oi, estou funcionando".`,
+    });
+    const s = ((Date.now() - inicio) / 1000).toFixed(1);
+    if (r.ok && r.saida) mostrar($('editar-resultado'), 'ok', `✓ ${r.modelo ?? ''} (${r.modo}) em ${s} s: ${r.saida.split('\n')[0].slice(0, 120)}`);
+    else mostrar($('editar-resultado'), 'falhou', `✕ ${(r.erro || r.saida || 'sem resposta').trim().split('\n').slice(-3).join('\n')}`);
+  } finally {
+    ev.target.disabled = false;
+  }
+});
+
 // ---------- início ----------
+if (roteiro) ponte = criarPonteFalsa({ agentes });
 if (ponte) {
   provedores = await ponte.provedores();
   pastaPadrao = await ponte.pastaPadrao();

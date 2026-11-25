@@ -134,3 +134,67 @@ details.arquivo summary { cursor: pointer; padding: 3px 8px; font: 11.5px ui-mon
 details.arquivo pre { margin: 0; border: 0; border-top: 1px solid var(--linha); border-radius: 0; max-height: 260px; overflow: auto; }
 .modo.gratis { background: #1f3a2a; color: #9be0b4; }
 .selo.gratis { border-style: solid; border-color: #2f6b45; color: #9be0b4; }
+
+/* painel de chaves e cartão do agente */
+dialog.largo { width: 640px; }
+dialog .nota { font-size: 11.5px; color: var(--apagado); margin: 0 0 10px; line-height: 1.45; }
+.lista-chaves { display: flex; flex-direction: column; gap: 8px; max-height: 60vh; overflow: auto; margin-bottom: 10px; }
+.prov { border: 1px solid var(--linha); border-radius: 8px; padding: 10px; display: grid; gap: 6px; }
+.prov-topo { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.prov-topo b { flex: 1; }
+.prov-topo a { font-size: 11px; color: var(--apagado); }
+.selo-acesso { font-size: 11px; padding: 2px 7px; border-radius: 99px; background: #2b2723; color: var(--apagado); }
+.selo-acesso.ok { background: #1d3326; color: #8fe0a8; }
+.selo-acesso.cli { background: #1f2a3a; color: #9cc3ff; }
+.prov-linha { display: flex; gap: 6px; }
+.prov-linha input { flex: 1; min-width: 0; }
+.prov-linha input.modelo { flex: 0 0 170px; }
+.prov-linha button { border: 1px solid var(--linha); background: #24211e; border-radius: 6px; padding: 5px 10px; white-space: nowrap; }
+.resultado { font-size: 12px; margin: 0; min-height: 1em; white-space: pre-wrap; }
+.resultado.ok { color: #8fe0a8; }
+.resultado.falhou { color: var(--vermelho); }
+.resultado.aviso { color: #e7c66b; }
+
+/* portão de testes */
+.rodada.portao p { margin: 4px 0; font-size: 12.5px; }
+.rodada.portao.passou { border-color: #2f6b45; }
+.rodada.portao.passou b { color: #8fe0a8; }
+.rodada.portao.falhou { border-color: #7a3328; }
+.rodada.portao.falhou b { color: var(--vermelho); }
+.rodada.portao summary { cursor: pointer; font-size: 11.5px; color: var(--apagado); }
+.rodada.portao pre { max-height: 220px; overflow: auto; font-size: 11px; }
+.rodada.portao .isolamento { font-size: 11px; color: var(--apagado); }
+.rodada.portao .isolamento.aberta { color: #e7c66b; }
+
+/* R31: roteiro falso e os cinco passos da Demo 1 */
+.modo.roteiro { background: #2c2440; color: #cdb8ff; }
+.passos { display: flex; gap: 4px; margin: 2px 12px 0 auto; padding: 0; list-style: none; counter-reset: passo; }
+.passos li { counter-increment: passo; padding: 4px 10px; border-radius: 99px; background: #1d1b18; color: var(--apagado); font-size: 11px; white-space: nowrap; transition: background .25s, color .25s; }
+.passos li::before { content: counter(passo) " · "; opacity: .6; }
+.passos li.feito { color: var(--texto); }
+.passos li.feito::before { content: "✓ "; opacity: 1; }
+.passos li.atual { background: #e2795b; color: #1a1512; font-weight: 600; }
+
+/* R35: decisão Manter/Descartar */
+.decisao .placar { margin: 0 0 8px; color: var(--apagado); font-size: 12px; }
+.diff-arquivo { margin: 4px 0; border: 1px solid var(--linha); border-radius: 6px; }
+.diff-arquivo summary { padding: 4px 8px; cursor: pointer; font-family: ui-monospace, monospace; font-size: 12px; }
+.diff-arquivo summary b { display: inline-block; width: 1em; }
+.diff-arquivo.criado summary b { color: #7fd69a; } .diff-arquivo.alterado summary b { color: #e7b866; } .diff-arquivo.removido summary b { color: #f08a80; }
+.diff-arquivo summary small { margin-left: 6px; color: var(--apagado); }
+.diff-arquivo summary button { float: right; border: 0; background: none; color: var(--apagado); cursor: pointer; }
+.diff { margin: 0; padding: 6px 8px; max-height: 320px; overflow: auto; font-size: 11px; line-height: 1.45; border-top: 1px solid var(--linha); white-space: pre-wrap; overflow-wrap: anywhere; }
+.diff span { display: block; }
+.diff .mais { color: #8fe0a6; background: #183322; }
+.diff .menos { color: #f4a49b; background: #3a1d1b; }
+.diff .trecho { color: #9a8fd8; }
+.decisao .botoes { display: flex; gap: 8px; margin: 10px 0 6px; }
+.decisao .botoes button { padding: 6px 14px; border-radius: 6px; border: 1px solid var(--linha); background: #24211d; color: var(--texto); cursor: pointer; }
+.decisao .botoes button.primario { background: #2e6b45; border-color: #2e6b45; }
+.decisao .botoes button.perigo { background: #8a2f28; border-color: #8a2f28; }
+.decisao .aviso-descarte { margin: 10px 0 0; color: #f4b3ab; font-size: 12px; }
+.decisao .veredito { margin: 10px 0 6px; font-weight: 600; }
+.decisao .veredito.ok { color: #8fe0a6; }
+.decisao.descartado { opacity: .75; }
+.decisao > .pasta { border: 0; background: none; padding: 3px 0; color: var(--apagado); font-size: 12px; cursor: pointer; }
+.decisao > .pasta:hover { color: var(--amarelo); }

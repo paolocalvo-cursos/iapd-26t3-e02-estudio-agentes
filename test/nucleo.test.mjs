@@ -168,3 +168,173 @@ test('R18 no modo gratuito o prompt pede blocos de arquivo, como na API', () => 
   assert.match(n.montarPrompt(T[1], 'crie uma página', [], { modo: 'gratis' }), /```arquivo:caminho\/relativo/);
 });
 
+
+test('R19 catálogo: 6 provedores, CLI só nos três oficiais, Ollama sem chave', () => {
+  assert.deepEqual(n.PROVEDORES, ['claude', 'gemini', 'codex', 'groq', 'openrouter', 'ollama']);
+  assert.deepEqual(n.PROVEDORES_CLI, ['claude', 'gemini', 'codex']);
+  assert.equal(n.CATALOGO.ollama.chave, null);
+  assert.ok(n.PROVEDORES.filter((p) => n.CATALOGO[p].compativel).every((p) => n.CATALOGO[p].baseUrl.startsWith('http')));
+});
+
+test('R19 modo: provedor compatível com chave usa API; Ollama sempre API; sem chave nem CLI, nada', () => {
+  assert.equal(n.modoDoProvedor('groq', ['GROQ_API_KEY'], {}), 'api');
+  assert.equal(n.modoDoProvedor('groq', [], { groq: true }), null); // groq não tem CLI
+  assert.equal(n.modoDoProvedor('ollama', [], {}), 'api');
+  assert.equal(n.modoDoProvedor('inexistente', ['X'], {}), null);
+  assert.equal(n.modoDoProvedor('groq', ['GROQ_API_KEY', 'GEMINI_API_KEY'], {}, true), 'gratis');
+});
+
+test('R20 validarChave: recusa vazia, com espaço e curta; prefixo diferente é só aviso', () => {
+  assert.equal(n.validarChave('claude', '').ok, false);
+  assert.equal(n.validarChave('claude', 'sk-ant-abc def-1234567890123').ok, false);
+  assert.equal(n.validarChave('claude', 'sk-ant-123').ok, false);
+  assert.equal(n.validarChave('ollama', 'qualquer-coisa-longa-1234567').ok, false);
+  assert.equal(n.validarChave('xyz', 'sk-ant-12345678901234567890').ok, false);
+  const boa = n.validarChave('claude', '  sk-ant-api03-ABCDEFGHIJKLMNOPQRSTUV  ');
+  assert.deepEqual([boa.ok, boa.chave, boa.aviso], [true, 'sk-ant-api03-ABCDEFGHIJKLMNOPQRSTUV', '']);
+  const estranha = n.validarChave('groq', 'sk-1234567890abcdefghijklmn');
+  assert.ok(estranha.ok && estranha.aviso.includes('gsk_'));
+  assert.equal(n.validarChave('gemini', 'AQ.Ab8RN6FALSAFALSAFALSAFALSA').aviso, ''); // formato novo do Google
+  assert.equal(n.validarChave('gemini', 'AIzaFALSAFALSAFALSAFALSAFALSA').aviso, '');
+});
+
+test('R20 mascararChave mostra só o começo e os 4 últimos', () => {
+  assert.equal(n.mascararChave('sk-ant-api03-ABCDEFGHIJKLMNOPa3f9'), 'sk-ant-…a3f9');
+  assert.equal(n.mascararChave('gsk_ABCDEFGHIJKLMNOPQRSTUV1234'), 'gsk_…1234');
+  assert.equal(n.mascararChave('AIzaSyABCDEFGHIJKLMNOPQRSTU9z8y'), 'AIz…9z8y');
+  assert.equal(n.mascararChave('curta'), '••••');
+  assert.equal(n.mascararChave(''), '');
+  assert.ok(!n.mascararChave('sk-ant-api03-SEGREDO-NO-MEIO-a3f9').includes('SEGREDO'));
+});
+
+test('R21 escolherChave: tela vence .env; sem nenhuma, null', () => {
+  assert.deepEqual(n.escolherChave('claude', { claude: 'da-tela' }, { ANTHROPIC_API_KEY: 'do-env' }),
+    { valor: 'da-tela', fonte: 'tela', variavel: 'ANTHROPIC_API_KEY' });
+  assert.equal(n.escolherChave('claude', {}, { ANTHROPIC_API_KEY: 'do-env' }).fonte, '.env');
+  assert.equal(n.escolherChave('claude', {}, {}), null);
+  assert.equal(n.escolherChave('ollama', { ollama: 'x' }, {}), null);
+});
+
+test('R22 classificarErro traduz os erros comuns', () => {
+  const t = (e) => n.classificarErro(e).tipo;
+  assert.equal(t({ status: 401, tipo: 'authentication_error' }), 'chave');
+  assert.equal(t({ status: 400, mensagem: 'API key not valid. Please pass a valid API key.' }), 'chave'); // Gemini
+  assert.equal(t({ status: 402, tipo: 'billing_error' }), 'credito');
+  assert.equal(t({ status: 400, mensagem: 'Your credit balance is too low to access the Anthropic API' }), 'credito');
+  assert.equal(t({ status: 429, mensagem: 'You exceeded your current quota', codigo: 'insufficient_quota' }), 'credito'); // OpenAI
+  assert.equal(t({ status: 403 }), 'permissao');
+  assert.equal(t({ status: 404, tipo: 'not_found_error', mensagem: 'model: claude-xyz' }), 'modelo');
+  assert.equal(t({ status: 429, tipo: 'rate_limit_error' }), 'cota');
+  assert.equal(t({ mensagem: 'RESOURCE_EXHAUSTED' }), 'cota');
+  assert.equal(t({ mensagem: 'Connection error.', codigo: 'ECONNREFUSED' }), 'conexao');
+  assert.equal(t({ mensagem: 'Request timed out.' }), 'tempo');
+  assert.equal(t({ status: 529, tipo: 'overloaded_error' }), 'servico');
+  assert.equal(n.classificarErro({ mensagem: 'algo estranho\nlinha 2' }).texto, 'algo estranho');
+});
+
+test('R23 modelo do agente: cartão → .env → padrão; editarAgente valida', () => {
+  const pixel = T.find((a) => a.id === 'pixel');
+  assert.equal(n.modeloDoAgente(pixel), 'claude-opus-5-5');
+  assert.equal(n.modeloDoAgente(pixel, { ANTHROPIC_MODEL: 'claude-sonnet-5-5' }), 'claude-sonnet-5-5');
+  const time = n.editarAgente(T, 'pixel', { provedor: 'groq', modelo: ' openai/gpt-oss-20b ' });
+  const novo = time.find((a) => a.id === 'pixel');
+  assert.deepEqual([novo.provedor, novo.modelo], ['groq', 'openai/gpt-oss-20b']);
+  assert.equal(n.modeloDoAgente(novo, { GROQ_MODEL: 'outro' }), 'openai/gpt-oss-20b');
+  assert.equal(n.editarAgente(time, 'pixel', { modelo: '' }).find((a) => a.id === 'pixel').modelo, undefined);
+  assert.throws(() => n.editarAgente(T, 'pixel', { provedor: 'xyz' }), /desconhecido/);
+  assert.throws(() => n.editarAgente(T, 'pixel', { modelo: 'rm -rf /' }), /inválido/);
+  assert.throws(() => n.editarAgente(T, 'ninguem', {}), /não encontrado/);
+  assert.equal(T.find((a) => a.id === 'pixel').provedor, 'claude'); // não altera o original
+});
+
+test('R24 detectarComandoTeste: .env → package.json → node --test → pytest → nada', () => {
+  const d = n.detectarComandoTeste;
+  assert.equal(d({ env: { COMANDO_TESTE: ' make check ' } }).comando, 'make check');
+  assert.deepEqual(d({ packageJson: '{"scripts":{"test":"node --test"}}' }),
+    { comando: 'npm test', origem: 'package.json', script: 'node --test', sensivel: false });
+  assert.equal(d({ packageJson: '{"scripts":{"test":"echo \\"Error: no test specified\\" && exit 1"}}' }), null);
+  assert.equal(d({ packageJson: '{"scripts":{"test":"rm -rf ~ && node --test"}}' }).sensivel, true);
+  assert.equal(d({ arquivos: ['src/app.js', 'src/app.test.mjs'] }).comando, 'node --test');
+  assert.equal(d({ arquivos: ['test/rotas.js'] }).comando, 'node --test');
+  assert.equal(d({ arquivos: ['tests\\test_api.py'] }).comando, 'python3 -m pytest -q');
+  assert.equal(d({ packageJson: 'json quebrado', arquivos: ['index.html'] }), null);
+});
+
+test('R25 resumirSaidaTeste guarda falhas e placar, tira cor e corta', () => {
+  const saida = ['TAP version 13', '\x1b[31mnot ok 1 - soma\x1b[0m', '  ---', '  expected: 3', '  actual: 4',
+    '    at TestContext (file:///p/test/soma.test.mjs:5:10)', 'ok 2 - outra', '# pass 1', '# fail 1'].join('\n');
+  const r = n.resumirSaidaTeste(saida);
+  assert.ok(r.includes('not ok 1 - soma') && r.includes('expected: 3') && r.includes('soma.test.mjs:5') && r.includes('# fail 1'));
+  assert.ok(!r.includes('\x1b') && !r.includes('ok 2 - outra') && !r.includes('TAP version'));
+  const longa = Array.from({ length: 100 }, (_, i) => `not ok ${i} - ${'x'.repeat(300)}`).join('\n');
+  const rl = n.resumirSaidaTeste(longa).split('\n');
+  assert.equal(rl.length, 41);
+  assert.ok(rl[0].length <= 200 && rl.at(-1).includes('+60 linhas'));
+  assert.equal(n.resumirSaidaTeste('linha a\nlinha b'), 'linha a\nlinha b'); // sem padrão de falha: o fim da saída
+});
+
+test('R26 decidirPortao: devolve até o limite, depois desiste; o resto segue', () => {
+  assert.equal(n.decidirPortao('passou', 1), 'seguir');
+  assert.equal(n.decidirPortao('pulou', 1), 'seguir');
+  assert.equal(n.decidirPortao('bloqueado', 1), 'seguir');
+  assert.equal(n.decidirPortao('falhou', 1), 'devolver');
+  assert.equal(n.decidirPortao('sem-teste', 3), 'devolver');
+  assert.equal(n.decidirPortao('tempo', 4), 'desistir');
+  assert.equal(n.decidirPortao('falhou', 2, 1), 'desistir');
+});
+
+test('R27 quemCorrige: autor do arquivo citado; sem citação, todos os executores', () => {
+  const autoria = { 'src/api.js': 'chevron', 'public/index.html': 'pixel' };
+  assert.deepEqual(n.quemCorrige('Error at src/api.js:10', autoria, ['chevron', 'pixel']), ['chevron']);
+  assert.deepEqual(n.quemCorrige('falhou em index.html', autoria, ['chevron', 'pixel']), ['pixel']);
+  assert.deepEqual(n.quemCorrige('not ok 1 - algo', autoria, ['chevron', 'pixel']), ['chevron', 'pixel']);
+  assert.deepEqual(n.quemCorrige('src/api.js', autoria, ['pixel']), ['pixel']); // autor fora da etapa não conta
+});
+
+test('R28 falhaDoPortao explica o que corrigir', () => {
+  const f = n.falhaDoPortao({ situacao: 'falhou', comando: 'npm test', resumo: 'not ok 1 - soma' }, 1);
+  assert.equal(f.nome, 'Portão de testes');
+  assert.ok(f.texto.includes('Tentativa 1 de 4') && f.texto.includes('npm test') && f.texto.includes('not ok 1 - soma'));
+  assert.ok(f.texto.includes('não apague nem enfraqueça testes'));
+  assert.ok(n.falhaDoPortao({ situacao: 'sem-teste' }, 2).texto.includes('não tem teste'));
+  assert.ok(n.falhaDoPortao({ situacao: 'tempo', comando: 'npm test' }, 1).texto.includes('tempo esgotou'));
+});
+
+test('R29 argumentosIsolamento: projeto gravável, resto só leitura, sem rede, ambiente zerado', () => {
+  const a = n.argumentosIsolamento({
+    projeto: '/home/eu/proj', nodeDir: '/home/eu/.nvm/versions/node/v22',
+    raizes: [{ caminho: '/bin', link: 'usr/bin' }, { caminho: '/lib64', link: null }],
+  });
+  const j = a.join(' ');
+  assert.ok(j.includes('--unshare-all') && !j.includes('--share-net'));
+  assert.ok(j.includes('--die-with-parent') && j.includes('--new-session') && j.includes('--clearenv'));
+  assert.ok(j.includes('--bind /home/eu/proj /home/eu/proj') && j.includes('--chdir /home/eu/proj'));
+  assert.ok(j.includes('--ro-bind /home/eu/.nvm/versions/node/v22 /home/eu/.nvm/versions/node/v22'));
+  assert.ok(j.includes('--symlink usr/bin /bin') && j.includes('--ro-bind /lib64 /lib64'));
+  assert.ok(!/--bind \/home\/eu /.test(j.replace('--bind /home/eu/proj', ''))); // a pasta pessoal não entra
+  assert.ok(j.includes('--setenv PATH /home/eu/.nvm/versions/node/v22/bin:/usr/local/bin:/usr/bin:/bin'));
+  assert.ok(!/API_KEY/.test(j));
+  assert.ok(a.indexOf('--tmpfs') < a.indexOf('--bind')); // o projeto entra depois do /tmp vazio (projeto pode estar em /tmp)
+  assert.ok(a.indexOf('--remount-ro') > a.lastIndexOf('--bind')); // raiz vira só leitura depois de montar tudo
+  assert.ok(n.argumentosIsolamento({ projeto: '/p', rede: true }).includes('--share-net'));
+  assert.ok(!n.argumentosIsolamento({ projeto: '/p', nodeDir: '/usr/lib/node' }).join(' ').includes('--ro-bind /usr/lib/node'));
+});
+
+test('R29 pastaIsolavel recusa a raiz, a pasta pessoal e quem a contém', () => {
+  assert.equal(n.pastaIsolavel('/home/eu/projetos/x', '/home/eu'), true);
+  assert.equal(n.pastaIsolavel('/tmp/proj', '/home/eu'), true);
+  assert.equal(n.pastaIsolavel('/home/eu', '/home/eu'), false);
+  assert.equal(n.pastaIsolavel('/home/eu/', '/home/eu'), false);
+  assert.equal(n.pastaIsolavel('/home', '/home/eu'), false);
+  assert.equal(n.pastaIsolavel('/', '/home/eu'), false);
+  assert.equal(n.pastaIsolavel('relativa/x', '/home/eu'), false);
+  assert.equal(n.pastaIsolavel('/home/eu/a/../..', '/home/eu'), false);
+});
+
+test('R30 decidirIsolamento: caixa de areia ou nada, salvo desligado de propósito', () => {
+  assert.equal(n.decidirIsolamento({ plataforma: 'linux', sondaOk: true }), 'bwrap');
+  assert.equal(n.decidirIsolamento({ plataforma: 'linux', sondaOk: false }), 'bloquear');
+  assert.equal(n.decidirIsolamento({ plataforma: 'win32', sondaOk: true }), 'bloquear');
+  assert.equal(n.decidirIsolamento({ plataforma: 'darwin', sondaOk: false, configuracao: 'desligado' }), 'sem-isolamento');
+  assert.equal(n.decidirPortao('sem-isolamento', 1), 'seguir');
+});

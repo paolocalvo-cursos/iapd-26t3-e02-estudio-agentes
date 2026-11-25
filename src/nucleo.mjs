@@ -34,7 +34,20 @@ export const TIME_PADRAO = Object.freeze([
   },
 ]);
 
-export const PROVEDORES = Object.freeze(['claude', 'gemini', 'codex']);
+// ---------- R19: catálogo de provedores ----------
+// claude, gemini e codex têm API oficial e CLI. Os demais falam a API compatível com a da OpenAI
+// (endereço próprio, sem CLI). O Ollama roda no computador e não precisa de chave.
+export const CATALOGO = Object.freeze({
+  claude: { rotulo: 'Anthropic (Claude)', chave: 'ANTHROPIC_API_KEY', varModelo: 'ANTHROPIC_MODEL', modelo: 'claude-opus-5-5', cli: 'claude', prefixo: 'sk-ant-', site: 'https://platform.claude.com/settings/keys' },
+  gemini: { rotulo: 'Google (Gemini)', chave: 'GEMINI_API_KEY', varModelo: 'GEMINI_MODEL', modelo: 'gemini-3.8-flash', cli: 'gemini', prefixo: ['AIza', 'AQ.'], site: 'https://aistudio.google.com/app/apikey' },
+  codex: { rotulo: 'OpenAI (GPT)', chave: 'OPENAI_API_KEY', varModelo: 'OPENAI_MODEL', modelo: 'gpt-5.5', cli: 'codex', prefixo: 'sk-', site: 'https://platform.openai.com/api-keys' },
+  groq: { rotulo: 'Groq (tem plano grátis)', chave: 'GROQ_API_KEY', varModelo: 'GROQ_MODEL', modelo: 'openai/gpt-oss-120b', compativel: true, baseUrl: 'https://api.groq.com/openai/v1', prefixo: 'gsk_', site: 'https://console.groq.com/keys' },
+  openrouter: { rotulo: 'OpenRouter', chave: 'OPENROUTER_API_KEY', varModelo: 'OPENROUTER_MODEL', modelo: 'openrouter/auto', compativel: true, baseUrl: 'https://openrouter.ai/api/v1', prefixo: 'sk-or-', site: 'https://openrouter.ai/keys' },
+  ollama: { rotulo: 'Ollama (local, sem chave)', chave: null, varModelo: 'OLLAMA_MODEL', varUrl: 'OLLAMA_BASE_URL', modelo: 'llama3.2', compativel: true, baseUrl: 'http://localhost:11434/v1', site: 'https://ollama.com/download' },
+});
+
+export const PROVEDORES = Object.freeze(Object.keys(CATALOGO));
+export const PROVEDORES_CLI = Object.freeze(PROVEDORES.filter((p) => CATALOGO[p].cli));
 export const FORMAS = Object.freeze(['bloco', 'estrela', 'nuvem']);
 export const ESTADOS = Object.freeze(['disponivel', 'pensando', 'trabalhando', 'concluido']);
 
@@ -213,7 +226,10 @@ export function criarAgente(agentes, dados) {
   const forma = FORMAS.includes(dados.forma) ? dados.forma : 'bloco';
   const cor = /^#[0-9a-f]{6}$/i.test(dados.cor ?? '') ? dados.cor : '#7aa2f7';
   const palavras = String(dados.palavras ?? '').split(',').map((p) => normalizar(p).trim()).filter(Boolean);
-  return [...agentes, { id, nome, papel, provedor, forma, cor, palavras, personalidade: String(dados.personalidade ?? '').trim() }];
+  const modelo = validarModelo(dados.modelo);
+  const novo = { id, nome, papel, provedor, forma, cor, palavras, personalidade: String(dados.personalidade ?? '').trim() };
+  if (modelo) novo.modelo = modelo;
+  return [...agentes, novo];
 }
 
 export function removerAgente(agentes, id) {
@@ -269,14 +285,118 @@ export function lerEnv(texto) {
 }
 
 // ---------- R16: cada IA usa a sua chave de API; sem chave, a CLI logada ----------
-export const CHAVE_DO_PROVEDOR = Object.freeze({ claude: 'ANTHROPIC_API_KEY', gemini: 'GEMINI_API_KEY', codex: 'OPENAI_API_KEY' });
+export const CHAVE_DO_PROVEDOR = Object.freeze(Object.fromEntries(PROVEDORES.map((p) => [p, CATALOGO[p].chave])));
 
 // No modo gratuito (R18) todos os agentes vão para o Gemini grátis e nada pago é usado.
+// `chaves` = nomes das variáveis com valor, venham do cofre (R21) ou do .env.
 export function modoDoProvedor(provedor, chaves, clis, gratuito = false) {
   if (gratuito) return chaves.includes(CHAVE_DO_PROVEDOR.gemini) ? 'gratis' : null;
-  if (chaves.includes(CHAVE_DO_PROVEDOR[provedor])) return 'api';
-  if (clis[provedor]) return 'cli';
+  const info = CATALOGO[provedor];
+  if (!info) return null;
+  if (!info.chave || chaves.includes(info.chave)) return 'api';
+  if (info.cli && clis[provedor]) return 'cli';
   return null;
+}
+
+// ---------- R20: chave digitada na tela ----------
+// Erro: vazia, com espaço no meio ou curta demais. Prefixo diferente do esperado é só aviso,
+// porque os formatos mudam e a pessoa pode estar usando um gateway.
+export function validarChave(provedor, chave) {
+  const info = CATALOGO[provedor];
+  if (!info) return { ok: false, erro: `Provedor desconhecido: ${provedor}` };
+  if (!info.chave) return { ok: false, erro: `${info.rotulo} não usa chave.` };
+  const c = String(chave ?? '').trim();
+  if (!c) return { ok: false, erro: 'Cole a chave antes de salvar.' };
+  if (/\s/.test(c)) return { ok: false, erro: 'A chave não pode ter espaço ou quebra de linha.' };
+  if (c.length < 20) return { ok: false, erro: 'Chave curta demais: confira se colou inteira.' };
+  const prefixos = [info.prefixo ?? []].flat();
+  const aviso = prefixos.length && !prefixos.some((p) => c.startsWith(p))
+    ? `Chaves de ${info.rotulo} costumam começar com ${prefixos.map((p) => `"${p}"`).join(' ou ')}. Salvei mesmo assim: use "Testar" para conferir.`
+    : '';
+  return { ok: true, chave: c, aviso };
+}
+
+// A tela nunca recebe a chave de volta: só o começo e os 4 últimos caracteres.
+export function mascararChave(chave) {
+  const c = String(chave ?? '');
+  if (!c) return '';
+  if (c.length < 12) return '••••';
+  // prefixo público: até dois pedaços curtos de letras minúsculas (sk-ant-, gsk_, sk-or-)
+  const prefixo = c.match(/^(?:[a-z]{1,5}[-_]){1,2}/)?.[0] ?? c.slice(0, 3);
+  return `${prefixo.slice(0, 8)}…${c.slice(-4)}`;
+}
+
+// ---------- R21: de onde vem a chave ----------
+// Ordem: chave salva pela tela (cofre) → chave do .env → nenhuma (aí vale a CLI, R16).
+export function escolherChave(provedor, cofre = {}, env = {}) {
+  const nome = CATALOGO[provedor]?.chave;
+  if (!nome) return null;
+  if (cofre[provedor]) return { valor: cofre[provedor], fonte: 'tela', variavel: nome };
+  if (env[nome]) return { valor: env[nome], fonte: '.env', variavel: nome };
+  return null;
+}
+
+// ---------- R22: erro do provedor em português ----------
+// Recebe o status HTTP, o tipo de erro da API e a mensagem; devolve o tipo e o que fazer.
+// Crédito vem antes de cota: a OpenAI responde "sem crédito" com 429 insufficient_quota.
+export function classificarErro({ status, tipo = '', mensagem = '', codigo = '' } = {}) {
+  const m = `${tipo} ${mensagem} ${codigo}`;
+  const s = Number(status) || 0;
+  const r = (t, texto) => ({ tipo: t, texto });
+  if (s === 401 || /authentication_error|invalid.{0,20}api.?key|api key not valid|incorrect api key|unauthori[sz]ed/i.test(m)) {
+    return r('chave', 'Chave inválida ou revogada. Gere outra no site do provedor e salve de novo.');
+  }
+  if (s === 402 || /billing_error|credit balance|insufficient_quota|insufficient credits|payment required/i.test(m)) {
+    return r('credito', 'Sem crédito na conta da API. Coloque crédito, use outra chave ou a CLI da assinatura.');
+  }
+  if (s === 403 || /permission_error|permission denied|forbidden/i.test(m)) {
+    return r('permissao', 'A chave não tem permissão para este modelo ou região.');
+  }
+  if (s === 404 || /not_found_error|model.{0,40}(not found|does not exist|not exist|não existe)|unknown model/i.test(m)) {
+    return r('modelo', 'Modelo não encontrado para esta chave. Confira o nome do modelo.');
+  }
+  if (s === 429 || /rate_limit|rate limit|RESOURCE_EXHAUSTED|quota/i.test(m)) {
+    return r('cota', 'Limite de uso atingido (por minuto ou por dia). Espere um pouco e tente de novo.');
+  }
+  if (/ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ECONNRESET|fetch failed|connection error|network/i.test(m)) {
+    return r('conexao', 'Sem conexão com o provedor. Confira a internet (ou, no Ollama, se ele está aberto).');
+  }
+  if (/timeout|timed out|ETIMEDOUT|aborted|tempo esgotado/i.test(m)) {
+    return r('tempo', 'O provedor demorou demais para responder. Tente de novo.');
+  }
+  if (s >= 500 || /overloaded/i.test(m)) {
+    return r('servico', 'O provedor está instável agora. Tente de novo em instantes.');
+  }
+  return r('outro', String(mensagem || 'Erro desconhecido.').split('\n')[0].slice(0, 200));
+}
+
+// ---------- R23: provedor e modelo de cada agente ----------
+// Modelo do agente: o escolhido no cartão dele → o do .env → o padrão do catálogo.
+export function validarModelo(modelo) {
+  const m = String(modelo ?? '').trim();
+  if (!m) return '';
+  if (m.length > 80 || !/^[A-Za-z0-9._:/@-]+$/.test(m)) throw new Error('Nome de modelo inválido: use letras, números e . _ : / @ -');
+  return m;
+}
+
+export function modeloDoAgente(agente, env = {}) {
+  const info = CATALOGO[agente?.provedor];
+  if (!info) return '';
+  return agente.modelo || env[info.varModelo] || info.modelo;
+}
+
+export function editarAgente(agentes, id, dados) {
+  const alvo = agentes.find((a) => a.id === id);
+  if (!alvo) throw new Error('Agente não encontrado.');
+  const provedor = dados.provedor ?? alvo.provedor;
+  if (!PROVEDORES.includes(provedor)) throw new Error(`Provedor desconhecido: ${provedor}`);
+  const modelo = validarModelo(dados.modelo ?? alvo.modelo);
+  return agentes.map((a) => {
+    if (a.id !== id) return a;
+    const novo = { ...a, provedor };
+    if (modelo) novo.modelo = modelo; else delete novo.modelo;
+    return novo;
+  });
 }
 
 // ---------- R18: chave que liga o modo gratuito ----------
@@ -304,4 +424,208 @@ export function extrairArquivos(texto) {
     if (caminho) arquivos.push({ caminho, conteudo: m[2].endsWith('\n') ? m[2] : m[2] + '\n' });
   }
   return arquivos;
+}
+
+// ---------- R24: qual comando de teste o portão roda ----------
+// Ordem: COMANDO_TESTE do .env → "test" do package.json → arquivos *.test.js / test/ (node --test)
+// → test_*.py (pytest). O "test" padrão do npm init ("no test specified") não conta.
+// Script do package.json foi escrito pelos agentes: se for perigoso (R7), o portão não roda sozinho.
+export function detectarComandoTeste({ packageJson = null, arquivos = [], env = {} } = {}) {
+  if (String(env.COMANDO_TESTE ?? '').trim()) return { comando: env.COMANDO_TESTE.trim(), origem: '.env', sensivel: false };
+  let scripts = {};
+  try { scripts = JSON.parse(packageJson ?? '{}')?.scripts ?? {}; } catch { scripts = {}; }
+  const script = typeof scripts.test === 'string' ? scripts.test.trim() : '';
+  if (script && !/no test specified/i.test(script)) {
+    return { comando: 'npm test', origem: 'package.json', script, sensivel: comandoSensivel(script) };
+  }
+  const caminhos = arquivos.map((a) => String(a).replace(/\\/g, '/'));
+  if (caminhos.some((c) => /(^|\/)[^/]+\.test\.(m?js|cjs)$/.test(c) || /^tests?\/.+\.(m?js|cjs)$/.test(c))) {
+    return { comando: 'node --test', origem: 'arquivos de teste', sensivel: false };
+  }
+  if (caminhos.some((c) => /(^|\/)(test_[^/]+|[^/]+_test)\.py$/.test(c))) {
+    return { comando: 'python3 -m pytest -q', origem: 'arquivos de teste', sensivel: false };
+  }
+  return null;
+}
+
+// ---------- R25: só o que importa da saída do teste ----------
+// O agente que vai corrigir recebe as linhas de falha e o placar, não o log inteiro (menos tokens).
+const LINHA_DE_FALHA = /not ok|fail|error|assert|expected|actual|✖|✗|×|traceback|exception|^\s*at .+:\d+|\.(m?js|cjs|ts|py):\d+|^# (tests|pass|fail)|tests? (passed|failed)|\d+ (passed|failed)/i;
+
+export function resumirSaidaTeste(saida, { maxLinhas = 40, maxColunas = 200 } = {}) {
+  const linhas = String(saida ?? '').replace(/\x1b\[[0-9;]*m/g, '').split(/\r?\n/).map((l) => l.trimEnd()).filter((l) => l.trim());
+  const importantes = [...new Set(linhas.filter((l) => LINHA_DE_FALHA.test(l)))];
+  const escolhidas = importantes.length ? importantes : linhas.slice(-30);
+  const cortadas = escolhidas.slice(0, maxLinhas).map((l) => (l.length > maxColunas ? l.slice(0, maxColunas - 1) + '…' : l));
+  if (escolhidas.length > maxLinhas) cortadas.push(`… (+${escolhidas.length - maxLinhas} linhas)`);
+  return cortadas.join('\n');
+}
+
+// ---------- R26: o que fazer depois do portão ----------
+// situacao: passou | falhou | tempo | sem-teste | pulou | desligado | bloqueado.
+// O portão roda no máximo 1 + MAX_DEVOLUCOES vezes; depois disso o time desiste e o revisor é avisado.
+export const MAX_DEVOLUCOES = 3;
+
+// "sem-isolamento" (não havia caixa de areia) também segue: o portão não roda e a tela explica.
+export function decidirPortao(situacao, rodada, max = MAX_DEVOLUCOES) {
+  if (!['falhou', 'tempo', 'sem-teste'].includes(situacao)) return 'seguir';
+  return rodada <= max ? 'devolver' : 'desistir';
+}
+
+// ---------- R27: para quem volta o trabalho ----------
+// Quem escreveu um arquivo citado na saída do teste; se ninguém for citado, todos que executaram.
+export function quemCorrige(resumo, autoria = {}, executores = []) {
+  const texto = String(resumo ?? '');
+  const citados = Object.entries(autoria)
+    .filter(([caminho]) => texto.includes(caminho) || texto.includes(caminho.split('/').pop()))
+    .map(([, id]) => id)
+    .filter((id) => executores.includes(id));
+  return citados.length ? [...new Set(citados)] : [...executores];
+}
+
+// ---------- R28: o que o agente recebe quando o portão devolve ----------
+export function falhaDoPortao(resultado, rodada, max = MAX_DEVOLUCOES) {
+  const tentativa = `Tentativa ${rodada} de ${max + 1}.`;
+  const texto = resultado.situacao === 'sem-teste'
+    ? `${tentativa} Vocês mudaram arquivos, mas o projeto não tem teste automatizado. Escreva um teste da sua parte `
+      + '(ex.: test/<nome>.test.mjs com node:test e node:assert, ou "test" no package.json) e confira que ele passa.'
+    : `${tentativa} O portão rodou \`${resultado.comando}\` e ${resultado.situacao === 'tempo' ? 'o tempo esgotou' : 'os testes falharam'}. `
+      + `Corrija a sua parte para os testes passarem; não apague nem enfraqueça testes.\nSaída (resumo):\n${resultado.resumo || '(sem saída)'}`;
+  return { nome: 'Portão de testes', papel: 'testes automáticos', texto };
+}
+
+// ---------- R29: caixa de areia dos testes (bubblewrap, Linux) ----------
+// O teste enxerga: o sistema só para leitura (/usr, /etc), o Node do usuário só para leitura,
+// a pasta do projeto com escrita e um /tmp vazio. A pasta pessoal (~/.ssh, ~/.config, chaves) não existe
+// lá dentro, a rede fica cortada e o ambiente é zerado (nenhuma chave de API chega ao teste).
+// `raizes`: /bin, /lib… desta máquina, com o alvo quando são atalhos (no Mint e no Ubuntu apontam para /usr).
+export function argumentosIsolamento({ projeto, nodeDir = '', raizes = [], leituraExtra = [], rede = false }) {
+  const a = ['--die-with-parent', '--new-session', '--unshare-all'];
+  if (rede) a.push('--share-net');
+  a.push('--ro-bind', '/usr', '/usr', '--ro-bind', '/etc', '/etc');
+  for (const r of raizes) {
+    if (r.link) a.push('--symlink', r.link, r.caminho); else a.push('--ro-bind', r.caminho, r.caminho);
+  }
+  if (nodeDir && !nodeDir.startsWith('/usr/')) a.push('--ro-bind', nodeDir, nodeDir);
+  for (const p of leituraExtra) a.push('--ro-bind', p, p);
+  a.push('--proc', '/proc', '--dev', '/dev', '--tmpfs', '/tmp', '--dir', '/tmp/casa');
+  // raiz só leitura no fim: escrever fora do projeto e do /tmp descartável falha na hora (EROFS)
+  a.push('--bind', projeto, projeto, '--remount-ro', '/', '--chdir', projeto, '--clearenv');
+  const caminho = [nodeDir && !nodeDir.startsWith('/usr/') ? `${nodeDir}/bin` : '', '/usr/local/bin', '/usr/bin', '/bin'].filter(Boolean).join(':');
+  const env = { PATH: caminho, HOME: '/tmp/casa', TMPDIR: '/tmp', LANG: 'C.UTF-8', CI: '1', FORCE_COLOR: '0', NO_COLOR: '1' };
+  for (const [k, v] of Object.entries(env)) a.push('--setenv', k, v);
+  return a;
+}
+
+// A pasta do projeto vira gravável dentro da caixa: não pode ser a raiz nem conter a pasta pessoal.
+export function pastaIsolavel(projeto, home) {
+  const p = String(projeto ?? '').replace(/\/+$/, '');
+  const h = String(home ?? '').replace(/\/+$/, '');
+  if (!p.startsWith('/') || p === '' || p.split('/').includes('..')) return false;
+  return !(h === p || h.startsWith(p + '/'));
+}
+
+// ---------- R30: o portão roda isolado, ou não roda ----------
+// PORTAO_ISOLAMENTO=desligado no .env é a única forma de rodar sem caixa de areia (escolha consciente).
+export function decidirIsolamento({ plataforma, sondaOk, configuracao = '' }) {
+  if (/^(desligado|off|false|nao|não|0)$/i.test(String(configuracao).trim())) return 'sem-isolamento';
+  if (plataforma === 'linux' && sondaOk) return 'bwrap';
+  return 'bloquear';
+}
+
+// ---------- R32: foto da pasta antes do pedido ----------
+// Arquivo maior que bytesArquivo fica fora da foto (o descarte não mexe nele) e é avisado.
+// Pasta com arquivos demais ou pesada demais não é fotografada: Descartar fica indisponível naquela rodada.
+export const LIMITES_FOTO = Object.freeze({ arquivos: 2000, bytesArquivo: 2_000_000, bytesTotal: 50_000_000 });
+
+export function selecionarParaFoto(arquivos, limites = LIMITES_FOTO) {
+  const grandes = arquivos.filter((a) => a.tamanho > limites.bytesArquivo).map((a) => a.caminho).sort();
+  const cabem = arquivos.filter((a) => a.tamanho <= limites.bytesArquivo);
+  if (cabem.length > limites.arquivos) {
+    return { ok: false, motivo: `a pasta tem mais de ${limites.arquivos} arquivos`, incluidos: [], grandes };
+  }
+  const total = cabem.reduce((s, a) => s + a.tamanho, 0);
+  if (total > limites.bytesTotal) {
+    return { ok: false, motivo: `a pasta passa de ${Math.round(limites.bytesTotal / 1e6)} MB`, incluidos: [], grandes };
+  }
+  return { ok: true, incluidos: cabem.map((a) => a.caminho).sort(), grandes };
+}
+
+// ---------- R33: o que mudou entre a foto e a pasta ----------
+// antes/depois: { caminho: hash }.
+export function compararFotos(antes, depois) {
+  const a = Object.keys(antes); const d = Object.keys(depois);
+  return {
+    criados: d.filter((c) => !(c in antes)).sort(),
+    alterados: d.filter((c) => c in antes && antes[c] !== depois[c]).sort(),
+    removidos: a.filter((c) => !(c in depois)).sort(),
+  };
+}
+
+export function totalDeMudancas({ criados = [], alterados = [], removidos = [] } = {}) {
+  return criados.length + alterados.length + removidos.length;
+}
+
+// ---------- R34: diff de linhas (formato unificado, 3 linhas de contexto) ----------
+// Devolve '' se nada mudou e null para binário ou arquivo grande demais para comparar linha a linha.
+export function diffLinhas(antes, depois, { contexto = 3, maxCelulas = 4_000_000 } = {}) {
+  if (String(antes).includes('\0') || String(depois).includes('\0')) return null;
+  const linhas = (t) => {
+    if (t === '') return [];
+    const l = String(t).split('\n');
+    if (l.at(-1) === '') l.pop(); // a quebra de linha final não é uma linha a mais
+    return l;
+  };
+  const a = linhas(antes); const b = linhas(depois);
+  let ini = 0;
+  while (ini < a.length && ini < b.length && a[ini] === b[ini]) ini++;
+  let fa = a.length; let fb = b.length;
+  while (fa > ini && fb > ini && a[fa - 1] === b[fb - 1]) { fa--; fb--; }
+  const A = a.slice(ini, fa); const B = b.slice(ini, fb);
+  if (!A.length && !B.length) return '';
+  if (A.length * B.length > maxCelulas) return null;
+
+  // maior subsequência comum, de trás para a frente
+  const t = Array.from({ length: A.length + 1 }, () => new Uint32Array(B.length + 1));
+  for (let i = A.length - 1; i >= 0; i--) {
+    for (let j = B.length - 1; j >= 0; j--) t[i][j] = A[i] === B[j] ? t[i + 1][j + 1] + 1 : Math.max(t[i + 1][j], t[i][j + 1]);
+  }
+  const ops = a.slice(0, ini).map((s) => [' ', s]);
+  let i = 0; let j = 0;
+  while (i < A.length || j < B.length) {
+    if (i < A.length && j < B.length && A[i] === B[j]) { ops.push([' ', A[i]]); i++; j++; }
+    else if (i < A.length && (j === B.length || t[i + 1][j] >= t[i][j + 1])) ops.push(['-', A[i++]]); // "-" antes de "+", como o git
+    else ops.push(['+', B[j++]]);
+  }
+  ops.push(...a.slice(fa).map((s) => [' ', s]));
+
+  // trechos: cada mudança com `contexto` linhas em volta; trechos que se encostam viram um só
+  const mudou = ops.map((o, k) => (o[0] !== ' ' ? k : -1)).filter((k) => k >= 0);
+  const trechos = [];
+  for (const k of mudou) {
+    const de = Math.max(0, k - contexto); const ate = Math.min(ops.length, k + contexto + 1);
+    const ult = trechos.at(-1);
+    if (ult && de <= ult[1]) ult[1] = ate; else trechos.push([de, ate]);
+  }
+  const linhaA = []; const linhaB = []; let la = 1; let lb = 1;
+  ops.forEach(([tipo]) => { linhaA.push(la); linhaB.push(lb); if (tipo !== '+') la++; if (tipo !== '-') lb++; });
+  return trechos.map(([de, ate]) => {
+    const parte = ops.slice(de, ate);
+    const ca = parte.filter((o) => o[0] !== '+').length; const cb = parte.filter((o) => o[0] !== '-').length;
+    const ia = ca ? linhaA[de] : linhaA[de] - 1; const ib = cb ? linhaB[de] : linhaB[de] - 1;
+    return [`@@ -${ia},${ca} +${ib},${cb} @@`, ...parte.map(([tipo, s]) => tipo + s)].join('\n');
+  }).join('\n');
+}
+
+// ---------- R35: descartar restaura a foto ----------
+// Apaga o que foi criado e devolve da foto o que mudou ou sumiu. Caminho inseguro derruba o plano inteiro.
+export function planoDeDescarte({ criados = [], alterados = [], removidos = [] }) {
+  const todos = [...criados, ...alterados, ...removidos];
+  const ruim = todos.find((c) => caminhoSeguro(c) !== c);
+  if (ruim !== undefined) throw new Error(`caminho inseguro no descarte: ${ruim}`);
+  return { apagar: [...criados], restaurar: [...alterados, ...removidos] };
+}
+
+export function idDeFotoValido(id) {
+  return /^[a-z0-9-]{1,64}$/.test(String(id ?? ''));
 }

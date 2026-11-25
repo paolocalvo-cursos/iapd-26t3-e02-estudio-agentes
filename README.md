@@ -11,11 +11,77 @@ Precisa de Node.js 20+.
 ```bash
 npm install
 npm start      # abre o app (na primeira vez o Electron baixa o próprio executável, ~100 MB)
-npm test       # 23 testes das regras R1–R18
+npm test       # 38 testes das regras R1–R30
 ```
 
 Depois, dê a cada IA uma forma de acesso: chave de API ou CLI logada. Sem assinatura nem crédito,
 use o **modo gratuito**, que precisa só de uma chave grátis do Gemini.
+
+## Roteiro falso (botão 🎬)
+
+Repete a Demo 1 da Aula 16 sem chamar nenhum modelo e sem gravar nada no disco: serve para apresentar a tela e
+conferir a orquestração sem custo. Ligue o 🎬 e aperte Enter com a caixa vazia (o pedido padrão é
+"Crie uma página de status com um endpoint /health"). A sequência:
+
+1. **Pedido**: a rodada de propostas.
+2. **Plano**: o Maestro chama Chevron e Pixel, com o Revisor no final.
+3. **Execução**: os dois trabalham em paralelo.
+4. **Testes**: o portão falha (`text/plain` em vez de JSON), o trabalho volta só para o Chevron, o portão passa e o Revisor aprova.
+5. **Decisão**: a lista de arquivos para você ler.
+
+As falas ficam em `src/roteiro.mjs` (R31). O painel 🔑 e o "Testar agente" continuam usando os provedores de verdade.
+
+## Manter ou descartar (passo 5)
+
+Antes de cada pedido, o Estúdio tira uma foto da pasta do projeto. No fim, o card **Decisão** mostra cada arquivo
+criado (`+`), alterado (`~`) ou removido (`−`), com o diff. A partir daí você escolhe:
+
+- **Manter**: fica tudo como os agentes deixaram.
+- **Descartar** (pede confirmação): apaga o que foi criado e devolve os arquivos alterados ou removidos ao estado de antes do pedido.
+
+O descarte não mexe em `node_modules`, `.git`, `dist` e nas outras pastas ignoradas, nem em arquivos com mais de 2 MB,
+que o card avisa. Mandar um pedido novo sem decidir mantém a rodada anterior. Regras R32 a R35.
+
+## Chaves e provedores (botão 🔑)
+
+- **Colar a chave pela tela:** o botão 🔑 lista os provedores (Anthropic, Gemini, OpenAI, Groq, OpenRouter e Ollama).
+  A chave fica cifrada no cofre do sistema (Keychain, DPAPI ou chaveiro do Linux) e vale mais que a do `.env`.
+  A tela só mostra o começo e os 4 últimos caracteres. Sem cofre disponível, o app não guarda: use o `.env`.
+- **Testar:** confere a chave e o modelo consultando a lista de modelos, sem gerar texto (não custa tokens).
+  Erros aparecem em português: chave inválida, modelo inexistente, cota, sem conexão.
+- **Provedor e modelo por agente:** duplo clique no mascote abre o cartão do agente. **Testar agente** faz uma
+  chamada de verdade pelo mesmo caminho dos pedidos e mostra falta de crédito, login vencido e modelo errado.
+
+## Portão de testes
+
+Quem roda os testes é o Estúdio, não o agente que escreveu o código.
+
+1. Depois da etapa de execução, se algum arquivo mudou, o Estúdio roda o comando de teste do projeto
+   (`npm test`, `node --test` ou `pytest`; troque com `COMANDO_TESTE` no `.env`). Limite: 2 minutos.
+2. Reprovou: o Maestro devolve para quem escreveu o arquivo citado na falha (ou para todos que executaram),
+   com só as linhas de falha. Até 3 devoluções; depois o time desiste e o Revisor é avisado.
+3. Mudou arquivo e não há teste: reprova e pede um teste.
+4. Se o `test` do `package.json` parecer perigoso (`rm -rf`, `curl | sh`…), ele não roda sozinho: aparece
+   para você aprovar.
+
+### Testes isolados (caixa de areia)
+
+O código de teste é escrito pelos agentes, então roda isolado no **bubblewrap** (Linux):
+
+| O teste… | |
+|---|---|
+| lê e escreve na pasta do projeto | sim |
+| usa um `/tmp` próprio, apagado no fim | sim |
+| lê o sistema (`/usr`, `/etc`) e o Node | só leitura |
+| vê a sua pasta pessoal (`~/.ssh`, `~/.config`, cofre de chaves) | não: ela não existe lá dentro |
+| acessa a internet | não (`PORTAO_REDE=liberada` libera) |
+| recebe chaves de API do ambiente | não: o ambiente é zerado |
+
+Antes do primeiro uso, uma sonda prova que a caixa bloqueia de verdade. Sem bubblewrap (`sudo apt install bubblewrap`),
+no Windows ou no macOS, o portão **não roda** e a tela explica; `PORTAO_ISOLAMENTO=desligado` roda sem isolamento,
+por sua conta. Os comandos do botão **Executar** continuam fora da caixa: só rodam com o seu clique.
+
+`PORTAO_TESTES=desligado` no `.env` pula o portão.
 
 ## Modo gratuito (sem assinatura)
 
@@ -133,13 +199,16 @@ Abra o app pelo terminal (`npm start`). Assim ele herda o `PATH` onde as CLIs fo
 
 | Arquivo | Papel |
 |---|---|
-| `REGRAS.md` | As regras R1–R18, com entrada, saída e origem. |
+| `REGRAS.md` | As regras R1–R35, com entrada, saída e origem. |
 | `.env.example` | Modelo do `.env`: modo gratuito, chaves e modelos de cada IA. |
 | `src/nucleo.mjs` | **Todas as regras.** Funções puras, sem DOM, Electron nem rede. |
 | `src/renderer.mjs` | Tela: mascotes em SVG, palco, rodada de propostas, chat. |
 | `src/main.js` | Janela, pasta do projeto, `.env`, chamadas por API (SDKs oficiais) ou CLI, gravação de arquivos. |
 | `src/preload.js` | Ponte segura entre a tela e o processo principal. |
+| `src/roteiro.mjs` | Ponte falsa do roteiro (R31): mesma interface do `preload.js`, com falas prontas. |
 | `test/nucleo.test.mjs` | Testes das regras do núcleo. |
+| `test/roteiro.test.mjs` | Testes do roteiro falso: time da Demo 1, falha, devolução, aprovação e descarte. |
+| `test/decisao.test.mjs` | Testes da foto, do diff e do plano de descarte (Manter/Descartar). |
 
 ## Fora do escopo (citado no post)
 
@@ -147,4 +216,5 @@ Abra o app pelo terminal (`npm start`). Assim ele herda o `PATH` onde as CLIs fo
 - Deploy automático na VPS.
 - Memória de projeto.
 - Plano aprovado antes de editar arquivos.
+- Isolamento dos testes no Windows e no macOS (lá o portão não roda sem `PORTAO_ISOLAMENTO=desligado`).
 - Revisão linha a linha (diff) dos arquivos alterados. Hoje o app lista os arquivos e os abre.
