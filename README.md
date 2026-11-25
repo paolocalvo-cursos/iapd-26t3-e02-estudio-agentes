@@ -17,6 +17,20 @@ npm test       # 38 testes das regras R1–R30
 Depois, dê a cada IA uma forma de acesso: chave de API ou CLI logada. Sem assinatura nem crédito,
 use o **modo gratuito**, que precisa só de uma chave grátis do Gemini.
 
+## Roteiro falso (botão 🎬)
+
+Repete a Demo 1 da Aula 16 sem chamar nenhum modelo e sem gravar nada no disco: serve para apresentar a tela e
+conferir a orquestração sem custo. Ligue o 🎬 e aperte Enter com a caixa vazia (o pedido padrão é
+"Crie uma página de status com um endpoint /health"). A sequência:
+
+1. **Pedido**: a rodada de propostas.
+2. **Plano**: o Maestro chama Chevron e Pixel, com o Revisor no final.
+3. **Execução**: os dois trabalham em paralelo.
+4. **Testes**: o portão falha (`text/plain` em vez de JSON), o trabalho volta só para o Chevron, o portão passa e o Revisor aprova.
+5. **Decisão**: a lista de arquivos para você ler.
+
+As falas ficam em `src/roteiro.mjs` (R31). O painel 🔑 e o "Testar agente" continuam usando os provedores de verdade.
+
 ## Chaves e provedores (botão 🔑)
 
 - **Colar a chave pela tela:** o botão 🔑 lista os provedores (Anthropic, Gemini, OpenAI, Groq, OpenRouter e Ollama).
@@ -174,13 +188,15 @@ Abra o app pelo terminal (`npm start`). Assim ele herda o `PATH` onde as CLIs fo
 
 | Arquivo | Papel |
 |---|---|
-| `REGRAS.md` | As regras R1–R18, com entrada, saída e origem. |
+| `REGRAS.md` | As regras R1–R31, com entrada, saída e origem. |
 | `.env.example` | Modelo do `.env`: modo gratuito, chaves e modelos de cada IA. |
 | `src/nucleo.mjs` | **Todas as regras.** Funções puras, sem DOM, Electron nem rede. |
 | `src/renderer.mjs` | Tela: mascotes em SVG, palco, rodada de propostas, chat. |
 | `src/main.js` | Janela, pasta do projeto, `.env`, chamadas por API (SDKs oficiais) ou CLI, gravação de arquivos. |
 | `src/preload.js` | Ponte segura entre a tela e o processo principal. |
+| `src/roteiro.mjs` | Ponte falsa do roteiro (R31): mesma interface do `preload.js`, com falas prontas. |
 | `test/nucleo.test.mjs` | Testes das regras do núcleo. |
+| `test/roteiro.test.mjs` | Testes do roteiro falso: time da Demo 1, falha, devolução e aprovação. |
 
 ## Fora do escopo (citado no post)
 

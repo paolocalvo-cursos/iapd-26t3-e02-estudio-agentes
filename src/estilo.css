@@ -165,3 +165,12 @@ dialog .nota { font-size: 11.5px; color: var(--apagado); margin: 0 0 10px; line-
 .rodada.portao pre { max-height: 220px; overflow: auto; font-size: 11px; }
 .rodada.portao .isolamento { font-size: 11px; color: var(--apagado); }
 .rodada.portao .isolamento.aberta { color: #e7c66b; }
+
+/* R31: roteiro falso e os cinco passos da Demo 1 */
+.modo.roteiro { background: #2c2440; color: #cdb8ff; }
+.passos { display: flex; gap: 4px; margin: 2px 12px 0 auto; padding: 0; list-style: none; counter-reset: passo; }
+.passos li { counter-increment: passo; padding: 4px 10px; border-radius: 99px; background: #1d1b18; color: var(--apagado); font-size: 11px; white-space: nowrap; transition: background .25s, color .25s; }
+.passos li::before { content: counter(passo) " · "; opacity: .6; }
+.passos li.feito { color: var(--texto); }
+.passos li.feito::before { content: "✓ "; opacity: 1; }
+.passos li.atual { background: #e2795b; color: #1a1512; font-weight: 600; }

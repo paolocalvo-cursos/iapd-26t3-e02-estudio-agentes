@@ -35,4 +35,5 @@ Origem: texto do post (Fernando Nogueira, LinkedIn) e o print do slide da ativid
 | R28 | A devolução diz a tentativa, o comando e o resumo, e proíbe apagar ou enfraquecer testes. | resultado → mensagem | muvuca |
 | R29 | Testes rodam no bubblewrap: projeto gravável; `/usr`, `/etc` e o Node só leitura; raiz só leitura; `/tmp` vazio e descartável; sem rede, sem pasta pessoal, ambiente zerado (sem chaves). A pasta do projeto não pode ser a raiz nem conter a pasta pessoal. | projeto → argumentos do `bwrap` | pedido do time |
 | R30 | Sem caixa de areia que passe na sonda, o portão não roda; só roda solto com `PORTAO_ISOLAMENTO=desligado`. | plataforma, sonda, `.env` → `bwrap/bloquear/sem-isolamento` | pedido do time |
+| R31 | Roteiro falso (🎬): uma ponte falsa toma o lugar da real e repete a Demo 1 sem modelo nem disco. Pedido vazio usa "Crie uma página de status com um endpoint /health"; o 1º portão falha citando `server.js` e volta só para quem o escreveu; o 2º passa; o Revisor fecha. O topo mostra os 5 passos: Pedido → Plano → Execução → Testes (portão e revisor) → Decisão. Chaves e "Testar agente" continuam na ponte real. | agentes → ponte falsa | Aula 16 |
 

@@ -1,8 +1,10 @@
 // Tela do Estúdio: desenha o estado e repassa os eventos ao núcleo.
 import * as n from './nucleo.mjs';
+import { criarPonteFalsa, PEDIDO_DO_ROTEIRO } from './roteiro.mjs';
 
 const $ = (id) => document.getElementById(id);
-const ponte = window.estudio; // ausente quando a tela é aberta direto no navegador
+const ponteReal = window.estudio; // ausente quando a tela é aberta direto no navegador
+let ponte = ponteReal; // no roteiro falso (R31), a ponte falsa toma o lugar da real
 const esperar = (ms) => new Promise((r) => setTimeout(r, ms));
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const hora = (t) => new Date(t).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
@@ -13,6 +15,7 @@ let agentes = salvo('agentes', n.TIME_PADRAO);
 let conversas = salvo('conversas', []);
 let atual = conversas[0] ?? n.novaConversa();
 let pasta = salvo('pasta', null); // null = pasta padrão (~/estudio-projetos)
+let roteiro = salvo('roteiro', false);
 let pastaPadrao = '';
 
 // ---------- estado da tela ----------
@@ -28,6 +31,7 @@ function persistir() {
   localStorage.setItem('conversas', JSON.stringify(conversas));
   localStorage.setItem('agentes', JSON.stringify(agentes));
   localStorage.setItem('pasta', JSON.stringify(pasta));
+  localStorage.setItem('roteiro', JSON.stringify(roteiro));
 }
 
 // ---------- mascotes (SVG) ----------
@@ -88,7 +92,10 @@ function desenharPalco() {
   const usados = [...new Set(agentes.map((a) => a.provedor))];
   const faltando = usados.filter((p) => !provedores.modos[p]);
   const ROTULO = { api: 'API', cli: 'CLI' };
-  if (!ponte) {
+  if (roteiro) {
+    $('modo').textContent = '🎬 roteiro falso · nenhum modelo é chamado, nada vai para o disco';
+    $('modo').title = 'Repete a Demo 1 com falas prontas. Clique em 🎬 para voltar aos agentes de verdade.';
+  } else if (!ponte) {
     $('modo').textContent = 'abra pelo app (npm start)';
   } else if (provedores.gratuito) {
     $('modo').textContent = faltando.length
@@ -99,9 +106,11 @@ function desenharPalco() {
     $('modo').textContent = usados.map((p) => `${p}: ${ROTULO[provedores.modos[p]] ?? 'sem acesso'}`).join(' · ');
     $('modo').title = 'API = chave salva em 🔑 ou no .env · CLI = login da assinatura na linha de comando';
   }
-  $('modo').classList.toggle('alerta', !ponte || faltando.length > 0);
+  $('modo').classList.toggle('alerta', !roteiro && (!ponte || faltando.length > 0));
+  $('modo').classList.toggle('roteiro', roteiro);
+  $('btn-roteiro').classList.toggle('ativo', roteiro);
   $('modo').classList.toggle('gratis', Boolean(ponte && provedores.gratuito && !faltando.length));
-  $('nome-projeto').textContent = pasta ? pasta.split(/[\\/]/).pop() : 'estudio-projetos (padrão)';
+  $('nome-projeto').textContent = roteiro ? 'roteiro falso' : pasta ? pasta.split(/[\\/]/).pop() : 'estudio-projetos (padrão)';
   $('btn-projeto').title = `${pasta || pastaPadrao}\nClique para escolher outra pasta`;
 }
 
@@ -112,7 +121,7 @@ function desenharChips() {
     agentes.map((a) => chip(a.id, a.nome, a.cor, estados[a.id] === 'trabalhando' ? ' •' : '')).join('');
   const alvo = agentes.find((a) => a.id === destino);
   $('destino-dica').textContent = alvo ? `Só ${alvo.nome} responde` : 'O time decide quem responde';
-  $('entrada').placeholder = alvo ? `Fale com ${alvo.nome}...` : 'Fale com o time...';
+  $('entrada').placeholder = alvo ? `Fale com ${alvo.nome}...` : roteiro ? `Enter vazio usa: ${PEDIDO_DO_ROTEIRO}` : 'Fale com o time...';
 }
 
 function formatar(texto) {
@@ -192,6 +201,16 @@ function desenhar() {
   $('compositor').querySelector('.enviar').disabled = ocupado;
 }
 
+// Os cinco passos da Demo 1 (Aula 16): Pedido, Plano, Execução, Testes, Decisão.
+function marcarPasso(passo) {
+  const ordem = [...$('passos').children].map((li) => li.dataset.passo);
+  const i = ordem.indexOf(passo);
+  [...$('passos').children].forEach((li, j) => {
+    li.classList.toggle('atual', j === i);
+    li.classList.toggle('feito', i >= 0 && j < i);
+  });
+}
+
 function mudarEstado(id, novo) {
   estados = n.trocarEstado(estados, id, novo);
   desenharPalco(); desenharChips(); desenharTrabalhando();
@@ -214,13 +233,13 @@ async function executar(agente, pedido, anteriores) {
   mudarEstado(agente.id, 'trabalhando');
   const modo = provedores.modos[agente.provedor] ?? 'cli';
   const prompt = n.montarPrompt(agente, pedido, anteriores, { modo });
-  const r = await ponte.executarAgente({ provedor: agente.provedor, modelo: agente.modelo, prompt, pasta, escrita: n.podeEscrever(agente) });
+  const r = await ponte.executarAgente({ agente: agente.id, provedor: agente.provedor, modelo: agente.modelo, prompt, pasta, escrita: n.podeEscrever(agente) });
   const erro = !r.ok || !r.saida;
   const texto = erro
     ? `${agente.provedor} falhou: ${(r.erro || r.saida || 'sem resposta').trim().split('\n').slice(-3).join('\n')}`
     : r.saida;
   postar({ autor: agente.id, texto, erro, gratis: r.modo === 'gratis', modelo: r.modelo });
-  const fala = texto.replace(/```[\s\S]*?```/g, '').split('\n').map((l) => l.trim()).find(Boolean) ?? texto;
+  const fala = texto.replace(/```[\s\S]*?```/g, '').replace(/[`*]/g, '').split('\n').map((l) => l.trim()).find(Boolean) ?? texto;
   falar(agente.id, fala.slice(0, 90));
   mudarEstado(agente.id, 'concluido');
   return { id: agente.id, nome: agente.nome, papel: agente.papel, texto, gravados: r.gravados ?? [] };
@@ -243,6 +262,7 @@ async function executarComPortao(etapa, pedido, anteriores) {
   anteriores.push(...resultados); anotar(resultados);
   if (!executores.length) return null;
   for (let rodada = 1; ; rodada++) {
+    marcarPasso('testes');
     const alterados = await ponte.arquivosAlterados({ pasta, desde: inicio });
     const el = $('trabalhando'); el.hidden = false; el.textContent = 'Portão de testes rodando…';
     const p = await ponte.portao({ pasta, houveMudanca: alterados.length > 0 });
@@ -266,6 +286,7 @@ async function executarComPortao(etapa, pedido, anteriores) {
     const nomes = corretores.map((id) => agentes.find((a) => a.id === id)?.nome).join(' e ');
     const maestro = agentes.find((a) => a.coordenador);
     if (maestro) { postar({ autor: maestro.id, texto: `Voltou para ${nomes}: ${ROTULO_PORTAO[p.situacao]}.` }); falar(maestro.id, `Voltou para ${nomes}.`); }
+    marcarPasso('execucao');
     resultados = await Promise.all(corretores.map((id) => executar(agentes.find((a) => a.id === id), pedido, [...anteriores, falha])));
     anteriores.push(...resultados); anotar(resultados);
   }
@@ -273,6 +294,8 @@ async function executarComPortao(etapa, pedido, anteriores) {
 
 async function enviar(pedido) {
   ocupado = true;
+  if (roteiro) ponte = criarPonteFalsa({ agentes }); // cada pedido recomeça o roteiro do zero
+  marcarPasso('pedido');
   postar({ autor: 'voce', texto: pedido });
   const inicio = Date.now() - 1000;
   try {
@@ -281,10 +304,12 @@ async function enviar(pedido) {
     desenharPalco();
     const alvo = agentes.find((a) => a.id === destino);
     if (alvo) {
+      marcarPasso('execucao');
       await executar(alvo, pedido, []);
     } else {
       // rodada de propostas: todos pensam, cada um diz se pega ou passa
       const maestro = agentes.find((a) => a.coordenador);
+      marcarPasso('plano');
       agentes.forEach((a) => { estados[a.id] = 'pensando'; });
       desenharPalco();
       await esperar(700);
@@ -298,14 +323,18 @@ async function enviar(pedido) {
       const anteriores = [];
       for (const etapa of etapas) {
         const executa = etapa.some((id) => n.podeEscrever(agentes.find((a) => a.id === id)));
+        const revisa = etapa.every((id) => agentes.find((a) => a.id === id)?.papel === 'Revisão de código');
+        marcarPasso(revisa ? 'testes' : 'execucao'); // o revisor confere: é verificação, não execução
         if (executa) { await executarComPortao(etapa, pedido, anteriores); continue; }
         const resultados = await Promise.all(etapa.map((id) => executar(agentes.find((a) => a.id === id), pedido, anteriores)));
         anteriores.push(...resultados);
       }
     }
     const arquivos = await ponte.arquivosAlterados({ pasta, desde: inicio });
+    marcarPasso('decisao');
     postar({ autor: 'sistema', tipo: 'arquivos', arquivos });
   } catch (e) {
+    marcarPasso(null);
     postar({ autor: 'sistema', texto: `Erro: ${e.message}`, erro: true });
   } finally {
     ocupado = false;
@@ -318,7 +347,7 @@ async function enviar(pedido) {
 // ---------- eventos ----------
 $('compositor').addEventListener('submit', (ev) => {
   ev.preventDefault();
-  const texto = $('entrada').value.trim();
+  const texto = $('entrada').value.trim() || (roteiro && destino === 'time' ? PEDIDO_DO_ROTEIRO : '');
   if (!texto || ocupado) return;
   $('entrada').value = '';
   $('entrada').style.height = '';
@@ -373,6 +402,16 @@ $('btn-projeto').addEventListener('click', async () => {
   if (p) { pasta = p; persistir(); desenharPalco(); }
 });
 
+// R31: liga e desliga o roteiro falso. A troca vale a partir do próximo pedido.
+$('btn-roteiro').addEventListener('click', async () => {
+  if (ocupado) return;
+  roteiro = !roteiro;
+  ponte = roteiro ? criarPonteFalsa({ agentes }) : ponteReal;
+  provedores = ponte ? await ponte.provedores() : { modos: {}, chaves: [] };
+  marcarPasso(null);
+  persistir(); desenhar(); $('entrada').focus();
+});
+
 $('btn-nova-conversa').addEventListener('click', () => {
   if (ocupado) return;
   persistir(); atual = n.novaConversa(); saidas.clear(); desenhar();
@@ -422,7 +461,7 @@ function seloAcesso(p) {
 }
 
 async function desenharChaves() {
-  const dados = await ponte.chaves();
+  const dados = await ponteReal.chaves();
   $('cofre-situacao').textContent = dados.cofre.disponivel
     ? 'As chaves digitadas aqui ficam cifradas no cofre do sistema e valem mais que as do .env. A tela nunca mostra a chave inteira.'
     : `⚠ ${dados.cofre.motivo}`;
@@ -448,7 +487,7 @@ function mostrar(alvo, classe, texto) {
 }
 
 $('btn-chaves').addEventListener('click', async () => {
-  if (!ponte) return;
+  if (!ponteReal) return;
   await desenharChaves();
   $('dlg-chaves').showModal();
 });
@@ -467,19 +506,19 @@ $('lista-chaves').addEventListener('click', async (ev) => {
   try {
     if (b.dataset.acao === 'salvar') {
       const entrada = linha.querySelector('.chave');
-      const r = await ponte.salvarChave({ provedor, chave: entrada.value });
+      const r = await ponteReal.salvarChave({ provedor, chave: entrada.value });
       entrada.value = ''; // a chave não fica na tela
       if (!r.ok) { mostrar(res, 'falhou', r.erro); return; }
       await desenharChaves();
       mostrar($('lista-chaves').querySelector(`[data-prov="${provedor}"] .resultado`), r.aviso ? 'aviso' : 'ok', r.aviso || 'Chave salva. Clique em Testar para conferir.');
       provedores = await ponte.provedores(); desenharPalco();
     } else if (b.dataset.acao === 'remover') {
-      await ponte.removerChave({ provedor });
+      await ponteReal.removerChave({ provedor });
       await desenharChaves();
       provedores = await ponte.provedores(); desenharPalco();
     } else if (b.dataset.acao === 'testar') {
       mostrar(res, '', 'Testando…');
-      const r = await ponte.testarProvedor({ provedor, modelo: linha.querySelector('.modelo').value });
+      const r = await ponteReal.testarProvedor({ provedor, modelo: linha.querySelector('.modelo').value });
       if (!r.ok) mostrar(res, 'falhou', `✕ ${r.modelo ?? ''}: ${r.erro}`);
       else if (r.aviso) mostrar(res, 'aviso', `✓ ${r.aviso}`);
       else mostrar(res, 'ok', `✓ ${r.modelo} respondeu em ${r.ms} ms (${ROTULO_FONTE[r.fonte] ?? r.fonte})`);
@@ -536,13 +575,13 @@ $('form-editar').addEventListener('submit', (ev) => {
 $('btn-testar-agente').addEventListener('click', async (ev) => {
   const f = $('form-editar');
   const a = agentes.find((x) => x.id === editando);
-  if (!a || !ponte) return;
+  if (!a || !ponteReal) return;
   ev.target.disabled = true;
   mostrar($('editar-resultado'), '', 'Chamando o agente…');
   const inicio = Date.now();
   try {
     provedores = await ponte.provedores();
-    const r = await ponte.executarAgente({
+    const r = await ponteReal.executarAgente({
       provedor: f.provedor.value, modelo: f.modelo.value, pasta, escrita: false,
       prompt: `Você é ${a.nome}, agente de ${a.papel}. Responda apenas: "oi, estou funcionando".`,
     });
@@ -555,6 +594,7 @@ $('btn-testar-agente').addEventListener('click', async (ev) => {
 });
 
 // ---------- início ----------
+if (roteiro) ponte = criarPonteFalsa({ agentes });
 if (ponte) {
   provedores = await ponte.provedores();
   pastaPadrao = await ponte.pastaPadrao();
