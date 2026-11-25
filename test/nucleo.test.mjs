@@ -244,3 +244,56 @@ test('R23 modelo do agente: cartão → .env → padrão; editarAgente valida', 
   assert.throws(() => n.editarAgente(T, 'ninguem', {}), /não encontrado/);
   assert.equal(T.find((a) => a.id === 'pixel').provedor, 'claude'); // não altera o original
 });
+
+test('R24 detectarComandoTeste: .env → package.json → node --test → pytest → nada', () => {
+  const d = n.detectarComandoTeste;
+  assert.equal(d({ env: { COMANDO_TESTE: ' make check ' } }).comando, 'make check');
+  assert.deepEqual(d({ packageJson: '{"scripts":{"test":"node --test"}}' }),
+    { comando: 'npm test', origem: 'package.json', script: 'node --test', sensivel: false });
+  assert.equal(d({ packageJson: '{"scripts":{"test":"echo \\"Error: no test specified\\" && exit 1"}}' }), null);
+  assert.equal(d({ packageJson: '{"scripts":{"test":"rm -rf ~ && node --test"}}' }).sensivel, true);
+  assert.equal(d({ arquivos: ['src/app.js', 'src/app.test.mjs'] }).comando, 'node --test');
+  assert.equal(d({ arquivos: ['test/rotas.js'] }).comando, 'node --test');
+  assert.equal(d({ arquivos: ['tests\\test_api.py'] }).comando, 'python3 -m pytest -q');
+  assert.equal(d({ packageJson: 'json quebrado', arquivos: ['index.html'] }), null);
+});
+
+test('R25 resumirSaidaTeste guarda falhas e placar, tira cor e corta', () => {
+  const saida = ['TAP version 13', '\x1b[31mnot ok 1 - soma\x1b[0m', '  ---', '  expected: 3', '  actual: 4',
+    '    at TestContext (file:///p/test/soma.test.mjs:5:10)', 'ok 2 - outra', '# pass 1', '# fail 1'].join('\n');
+  const r = n.resumirSaidaTeste(saida);
+  assert.ok(r.includes('not ok 1 - soma') && r.includes('expected: 3') && r.includes('soma.test.mjs:5') && r.includes('# fail 1'));
+  assert.ok(!r.includes('\x1b') && !r.includes('ok 2 - outra') && !r.includes('TAP version'));
+  const longa = Array.from({ length: 100 }, (_, i) => `not ok ${i} - ${'x'.repeat(300)}`).join('\n');
+  const rl = n.resumirSaidaTeste(longa).split('\n');
+  assert.equal(rl.length, 41);
+  assert.ok(rl[0].length <= 200 && rl.at(-1).includes('+60 linhas'));
+  assert.equal(n.resumirSaidaTeste('linha a\nlinha b'), 'linha a\nlinha b'); // sem padrão de falha: o fim da saída
+});
+
+test('R26 decidirPortao: devolve até o limite, depois desiste; o resto segue', () => {
+  assert.equal(n.decidirPortao('passou', 1), 'seguir');
+  assert.equal(n.decidirPortao('pulou', 1), 'seguir');
+  assert.equal(n.decidirPortao('bloqueado', 1), 'seguir');
+  assert.equal(n.decidirPortao('falhou', 1), 'devolver');
+  assert.equal(n.decidirPortao('sem-teste', 3), 'devolver');
+  assert.equal(n.decidirPortao('tempo', 4), 'desistir');
+  assert.equal(n.decidirPortao('falhou', 2, 1), 'desistir');
+});
+
+test('R27 quemCorrige: autor do arquivo citado; sem citação, todos os executores', () => {
+  const autoria = { 'src/api.js': 'chevron', 'public/index.html': 'pixel' };
+  assert.deepEqual(n.quemCorrige('Error at src/api.js:10', autoria, ['chevron', 'pixel']), ['chevron']);
+  assert.deepEqual(n.quemCorrige('falhou em index.html', autoria, ['chevron', 'pixel']), ['pixel']);
+  assert.deepEqual(n.quemCorrige('not ok 1 - algo', autoria, ['chevron', 'pixel']), ['chevron', 'pixel']);
+  assert.deepEqual(n.quemCorrige('src/api.js', autoria, ['pixel']), ['pixel']); // autor fora da etapa não conta
+});
+
+test('R28 falhaDoPortao explica o que corrigir', () => {
+  const f = n.falhaDoPortao({ situacao: 'falhou', comando: 'npm test', resumo: 'not ok 1 - soma' }, 1);
+  assert.equal(f.nome, 'Portão de testes');
+  assert.ok(f.texto.includes('Tentativa 1 de 4') && f.texto.includes('npm test') && f.texto.includes('not ok 1 - soma'));
+  assert.ok(f.texto.includes('não apague nem enfraqueça testes'));
+  assert.ok(n.falhaDoPortao({ situacao: 'sem-teste' }, 2).texto.includes('não tem teste'));
+  assert.ok(n.falhaDoPortao({ situacao: 'tempo', comando: 'npm test' }, 1).texto.includes('tempo esgotou'));
+});

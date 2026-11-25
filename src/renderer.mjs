@@ -149,6 +149,16 @@ function desenharMensagens() {
           <div class="barra"><span style="width:${p.confianca}%"></span></div><p>${esc(p.fala)}</p></div>`;
       }).join('')}</div>`;
     }
+    if (m.tipo === 'portao') {
+      const ok = ['passou', 'pulou', 'desligado'].includes(m.situacao);
+      const tempo = m.ms ? ` em ${(m.ms / 1000).toFixed(1)} s` : '';
+      const cmd = m.comando ? ` <code>${esc(m.comando)}</code>` : '';
+      const origem = m.origem ? `<small> (${esc(m.origem)})</small>` : '';
+      const det = m.resumo || m.detalhe
+        ? `<details><summary>saída</summary><pre>${esc(m.resumo || '')}</pre>${m.detalhe && m.detalhe !== m.resumo ? `<details><summary>saída completa</summary><pre>${esc(m.detalhe)}</pre></details>` : ''}</details>` : '';
+      return `<div class="rodada portao ${ok ? 'passou' : 'falhou'}"><h3>Portão de testes · rodada ${m.rodada}</h3>
+        <p><b>${ROTULO_PORTAO[m.situacao] ?? esc(m.situacao)}</b>${cmd}${origem}${tempo}</p>${det}</div>`;
+    }
     if (m.tipo === 'arquivos') {
       return `<div class="rodada arquivos"><h3>Arquivos criados ou alterados</h3>${m.arquivos.length
         ? m.arquivos.map((f) => `<button data-abrir="${esc(f)}">📄 ${esc(f)}</button>`).join('')
@@ -207,9 +217,54 @@ async function executar(agente, pedido, anteriores) {
     ? `${agente.provedor} falhou: ${(r.erro || r.saida || 'sem resposta').trim().split('\n').slice(-3).join('\n')}`
     : r.saida;
   postar({ autor: agente.id, texto, erro, gratis: r.modo === 'gratis', modelo: r.modelo });
-  falar(agente.id, texto.split('\n')[0].slice(0, 90));
+  const fala = texto.replace(/```[\s\S]*?```/g, '').split('\n').map((l) => l.trim()).find(Boolean) ?? texto;
+  falar(agente.id, fala.slice(0, 90));
   mudarEstado(agente.id, 'concluido');
-  return { nome: agente.nome, papel: agente.papel, texto };
+  return { id: agente.id, nome: agente.nome, papel: agente.papel, texto, gravados: r.gravados ?? [] };
+}
+
+// ---------- portão de testes (R24–R28) ----------
+const ROTULO_PORTAO = {
+  passou: '✓ passou', falhou: '✕ falhou', tempo: '✕ tempo esgotado', 'sem-teste': '✕ sem teste',
+  bloqueado: '⚠ precisa da sua aprovação', pulou: 'pulou: nada mudou', desligado: 'desligado no .env',
+};
+
+// Roda a etapa de execução e, enquanto o portão reprovar, devolve o trabalho para quem fez.
+async function executarComPortao(etapa, pedido, anteriores) {
+  const inicio = Date.now() - 1000;
+  const autoria = {};
+  const anotar = (rs) => rs.forEach((r) => r.gravados.forEach((c) => { autoria[c] = r.id; }));
+  const executores = etapa.filter((id) => n.podeEscrever(agentes.find((a) => a.id === id)));
+  let resultados = await Promise.all(etapa.map((id) => executar(agentes.find((a) => a.id === id), pedido, anteriores)));
+  anteriores.push(...resultados); anotar(resultados);
+  if (!executores.length) return null;
+  for (let rodada = 1; ; rodada++) {
+    const alterados = await ponte.arquivosAlterados({ pasta, desde: inicio });
+    const el = $('trabalhando'); el.hidden = false; el.textContent = 'Portão de testes rodando…';
+    const p = await ponte.portao({ pasta, houveMudanca: alterados.length > 0 });
+    el.hidden = true;
+    const decisao = n.decidirPortao(p.situacao, rodada);
+    postar({ autor: 'sistema', tipo: 'portao', ...p, rodada, decisao, saida: undefined, detalhe: p.saida });
+    if (p.situacao === 'bloqueado') {
+      postar({ autor: 'sistema', texto: `O "test" do package.json parece perigoso e não rodou sozinho:\n\`${p.script}\`\nLeia antes de aprovar:\n\`\`\`bash\n${p.comando}\n\`\`\`` });
+    }
+    if (decisao === 'seguir') {
+      if (p.situacao === 'passou') anteriores.push({ nome: 'Portão de testes', papel: 'testes automáticos', texto: `APROVADO: \`${p.comando}\` passou.\n${p.resumo || ''}` });
+      return p;
+    }
+    if (decisao === 'desistir') {
+      postar({ autor: 'sistema', texto: `O portão não aprovou depois de ${n.MAX_DEVOLUCOES} devoluções. O Revisor vai olhar mesmo assim, sabendo disso.`, erro: true });
+      anteriores.push({ nome: 'Portão de testes', papel: 'testes automáticos', texto: `NÃO APROVADO depois de ${n.MAX_DEVOLUCOES} devoluções.\n${p.resumo || ''}` });
+      return p;
+    }
+    const falha = n.falhaDoPortao(p, rodada);
+    const corretores = n.quemCorrige(p.resumo, autoria, executores);
+    const nomes = corretores.map((id) => agentes.find((a) => a.id === id)?.nome).join(' e ');
+    const maestro = agentes.find((a) => a.coordenador);
+    if (maestro) { postar({ autor: maestro.id, texto: `Voltou para ${nomes}: ${ROTULO_PORTAO[p.situacao]}.` }); falar(maestro.id, `Voltou para ${nomes}.`); }
+    resultados = await Promise.all(corretores.map((id) => executar(agentes.find((a) => a.id === id), pedido, [...anteriores, falha])));
+    anteriores.push(...resultados); anotar(resultados);
+  }
 }
 
 async function enviar(pedido) {
@@ -238,6 +293,8 @@ async function enviar(pedido) {
       if (maestro) { postar({ autor: maestro.id, texto: mensagem, time: etapas.flat() }); falar(maestro.id, mensagem); }
       const anteriores = [];
       for (const etapa of etapas) {
+        const executa = etapa.some((id) => n.podeEscrever(agentes.find((a) => a.id === id)));
+        if (executa) { await executarComPortao(etapa, pedido, anteriores); continue; }
         const resultados = await Promise.all(etapa.map((id) => executar(agentes.find((a) => a.id === id), pedido, anteriores)));
         anteriores.push(...resultados);
       }

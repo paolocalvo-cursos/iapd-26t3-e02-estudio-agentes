@@ -28,3 +28,9 @@ Origem: texto do post (Fernando Nogueira, LinkedIn) e o print do slide da ativid
 | R21 | Origem da chave: cofre do sistema (tela) → `.env` → CLI (R16). Sem cofre de verdade, o app não guarda e orienta usar o `.env`. | provedor → `{valor, fonte}` | pedido do time |
 | R22 | Erro do provedor vira texto em português: chave, crédito, permissão, modelo, cota, conexão, tempo, serviço. Crédito vem antes de cota (OpenAI responde 429 `insufficient_quota`). | erro → `{tipo, texto}` | pedido do time |
 | R23 | Cada agente tem provedor e modelo próprios (cartão do agente); modelo: cartão → `.env` → padrão do catálogo. | agente → modelo | pedido do time |
+| R24 | Portão escolhe o comando de teste: `COMANDO_TESTE` do `.env` → `test` do `package.json` (o padrão do `npm init` não conta) → `*.test.js` ou `test/` (`node --test`) → `test_*.py` (pytest). Script perigoso (R7) não roda sozinho: pede aprovação. | projeto → `{comando, origem, sensivel}` | muvuca |
+| R25 | O agente que corrige recebe só as linhas de falha e o placar (até 40 linhas), sem cores. | saída → resumo | caveman |
+| R26 | Depois do portão: passou/pulou → segue; falhou, tempo esgotado ou sem teste → devolve até 3 vezes; depois desiste e avisa o Revisor. | situação, rodada → `seguir/devolver/desistir` | muvuca |
+| R27 | O trabalho volta para quem escreveu o arquivo citado na falha; sem citação, para todos que executaram. | resumo, autoria → agentes | muvuca |
+| R28 | A devolução diz a tentativa, o comando e o resumo, e proíbe apagar ou enfraquecer testes. | resultado → mensagem | muvuca |
+

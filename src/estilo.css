@@ -154,3 +154,12 @@ dialog .nota { font-size: 11.5px; color: var(--apagado); margin: 0 0 10px; line-
 .resultado.ok { color: #8fe0a8; }
 .resultado.falhou { color: var(--vermelho); }
 .resultado.aviso { color: #e7c66b; }
+
+/* portão de testes */
+.rodada.portao p { margin: 4px 0; font-size: 12.5px; }
+.rodada.portao.passou { border-color: #2f6b45; }
+.rodada.portao.passou b { color: #8fe0a8; }
+.rodada.portao.falhou { border-color: #7a3328; }
+.rodada.portao.falhou b { color: var(--vermelho); }
+.rodada.portao summary { cursor: pointer; font-size: 11.5px; color: var(--apagado); }
+.rodada.portao pre { max-height: 220px; overflow: auto; font-size: 11px; }

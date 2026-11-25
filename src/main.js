@@ -239,15 +239,24 @@ async function modos() {
 
 ipcMain.handle('provedores', () => modos());
 
+// Roda um processo com prazo. Fora do Windows, o filho abre um grupo próprio: no prazo esgotado,
+// o grupo inteiro é encerrado (um "npm test" travado não sobrevive ao bash que o chamou).
+const LIMITE_SAIDA = 200_000;
 function rodar(cmd, args, cwd, env, tempo = TEMPO_MAXIMO_MS) {
   return new Promise((resolve) => {
-    const filho = spawn(cmd, args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
-    let saida = ''; let erro = '';
-    const timer = setTimeout(() => { filho.kill('SIGTERM'); erro += '\n(tempo esgotado)'; }, tempo);
-    filho.stdout.on('data', (d) => { saida += d; });
-    filho.stderr.on('data', (d) => { erro += d; });
-    filho.on('error', (e) => { clearTimeout(timer); resolve({ ok: false, saida, erro: e.message }); });
-    filho.on('close', (codigo) => { clearTimeout(timer); resolve({ ok: codigo === 0, codigo, saida: saida.trim(), erro: erro.trim() }); });
+    const grupo = process.platform !== 'win32';
+    const filho = spawn(cmd, args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'], detached: grupo });
+    let saida = ''; let erro = ''; let tempoEsgotado = false;
+    const guardar = (atual, d) => (atual.length < LIMITE_SAIDA ? atual + d : atual);
+    const encerrar = (sinal) => { try { grupo ? process.kill(-filho.pid, sinal) : filho.kill(sinal); } catch { /* já saiu */ } };
+    const timer = setTimeout(() => {
+      tempoEsgotado = true; erro += '\n(tempo esgotado)';
+      encerrar('SIGTERM'); setTimeout(() => encerrar('SIGKILL'), 3000).unref();
+    }, tempo);
+    filho.stdout.on('data', (d) => { saida = guardar(saida, d); });
+    filho.stderr.on('data', (d) => { erro = guardar(erro, d); });
+    filho.on('error', (e) => { clearTimeout(timer); resolve({ ok: false, saida, erro: e.message, tempoEsgotado }); });
+    filho.on('close', (codigo) => { clearTimeout(timer); resolve({ ok: codigo === 0 && !tempoEsgotado, codigo, saida: saida.trim(), erro: erro.trim(), tempoEsgotado }); });
   });
 }
 
@@ -393,6 +402,35 @@ async function listarArquivos(raiz, ignorar, profundidade = 5) {
   await andar(raiz, 0);
   return lista;
 }
+
+// ---------- portão de testes (R24–R26) ----------
+// Quem roda os testes é o Estúdio, não o agente. O comando é decidido aqui, nunca pela tela.
+const TEMPO_PORTAO_MS = 120_000;
+
+ipcMain.handle('portao', async (_ev, { pasta, houveMudanca }) => {
+  const { ignorarCaminho, detectarComandoTeste, resumirSaidaTeste } = await nucleo;
+  const { env, doArquivo } = await ambiente();
+  if (/^(desligado|off|false|nao|não|0)$/i.test(String(doArquivo.PORTAO_TESTES ?? '').trim())) return { situacao: 'desligado' };
+  if (!houveMudanca) return { situacao: 'pulou' };
+  const raiz = pastaDoProjeto(pasta);
+  let packageJson = null;
+  try { packageJson = await fs.promises.readFile(path.join(raiz, 'package.json'), 'utf8'); } catch { /* sem package.json */ }
+  const arquivos = (await listarArquivos(raiz, ignorarCaminho)).map((a) => a.caminho);
+  const teste = detectarComandoTeste({ packageJson, arquivos, env: doArquivo });
+  if (!teste) return { situacao: 'sem-teste' };
+  if (teste.sensivel) return { situacao: 'bloqueado', ...teste };
+  // NODE_TEST_CONTEXT herdado faz um node --test aninhado sair com 0 mesmo falhando (lição do muvuca).
+  const limpo = { ...env, CI: '1', FORCE_COLOR: '0' };
+  delete limpo.NODE_TEST_CONTEXT;
+  const inicio = Date.now();
+  const r = await rodar('bash', ['-lc', teste.comando], raiz, limpo, TEMPO_PORTAO_MS);
+  const bruta = [r.saida, r.erro].filter(Boolean).join('\n');
+  return {
+    situacao: r.tempoEsgotado ? 'tempo' : r.ok ? 'passou' : 'falhou',
+    ...teste, codigo: r.codigo, ms: Date.now() - inicio,
+    resumo: resumirSaidaTeste(bruta), saida: bruta.slice(-6000),
+  };
+});
 
 ipcMain.handle('arquivos-alterados', async (_ev, { pasta, desde }) => {
   const { ignorarCaminho, arquivosAlterados } = await nucleo;

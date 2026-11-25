@@ -13,4 +13,5 @@ contextBridge.exposeInMainWorld('estudio', {
   salvarChave: (dados) => ipcRenderer.invoke('chave-salvar', dados),
   removerChave: (dados) => ipcRenderer.invoke('chave-remover', dados),
   testarProvedor: (dados) => ipcRenderer.invoke('provedor-testar', dados),
+  portao: (dados) => ipcRenderer.invoke('portao', dados),
 });

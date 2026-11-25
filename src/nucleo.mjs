@@ -424,3 +424,70 @@ export function extrairArquivos(texto) {
   }
   return arquivos;
 }
+
+// ---------- R24: qual comando de teste o portão roda ----------
+// Ordem: COMANDO_TESTE do .env → "test" do package.json → arquivos *.test.js / test/ (node --test)
+// → test_*.py (pytest). O "test" padrão do npm init ("no test specified") não conta.
+// Script do package.json foi escrito pelos agentes: se for perigoso (R7), o portão não roda sozinho.
+export function detectarComandoTeste({ packageJson = null, arquivos = [], env = {} } = {}) {
+  if (String(env.COMANDO_TESTE ?? '').trim()) return { comando: env.COMANDO_TESTE.trim(), origem: '.env', sensivel: false };
+  let scripts = {};
+  try { scripts = JSON.parse(packageJson ?? '{}')?.scripts ?? {}; } catch { scripts = {}; }
+  const script = typeof scripts.test === 'string' ? scripts.test.trim() : '';
+  if (script && !/no test specified/i.test(script)) {
+    return { comando: 'npm test', origem: 'package.json', script, sensivel: comandoSensivel(script) };
+  }
+  const caminhos = arquivos.map((a) => String(a).replace(/\\/g, '/'));
+  if (caminhos.some((c) => /(^|\/)[^/]+\.test\.(m?js|cjs)$/.test(c) || /^tests?\/.+\.(m?js|cjs)$/.test(c))) {
+    return { comando: 'node --test', origem: 'arquivos de teste', sensivel: false };
+  }
+  if (caminhos.some((c) => /(^|\/)(test_[^/]+|[^/]+_test)\.py$/.test(c))) {
+    return { comando: 'python3 -m pytest -q', origem: 'arquivos de teste', sensivel: false };
+  }
+  return null;
+}
+
+// ---------- R25: só o que importa da saída do teste ----------
+// O agente que vai corrigir recebe as linhas de falha e o placar, não o log inteiro (menos tokens).
+const LINHA_DE_FALHA = /not ok|fail|error|assert|expected|actual|✖|✗|×|traceback|exception|^\s*at .+:\d+|\.(m?js|cjs|ts|py):\d+|^# (tests|pass|fail)|tests? (passed|failed)|\d+ (passed|failed)/i;
+
+export function resumirSaidaTeste(saida, { maxLinhas = 40, maxColunas = 200 } = {}) {
+  const linhas = String(saida ?? '').replace(/\x1b\[[0-9;]*m/g, '').split(/\r?\n/).map((l) => l.trimEnd()).filter((l) => l.trim());
+  const importantes = [...new Set(linhas.filter((l) => LINHA_DE_FALHA.test(l)))];
+  const escolhidas = importantes.length ? importantes : linhas.slice(-30);
+  const cortadas = escolhidas.slice(0, maxLinhas).map((l) => (l.length > maxColunas ? l.slice(0, maxColunas - 1) + '…' : l));
+  if (escolhidas.length > maxLinhas) cortadas.push(`… (+${escolhidas.length - maxLinhas} linhas)`);
+  return cortadas.join('\n');
+}
+
+// ---------- R26: o que fazer depois do portão ----------
+// situacao: passou | falhou | tempo | sem-teste | pulou | desligado | bloqueado.
+// O portão roda no máximo 1 + MAX_DEVOLUCOES vezes; depois disso o time desiste e o revisor é avisado.
+export const MAX_DEVOLUCOES = 3;
+
+export function decidirPortao(situacao, rodada, max = MAX_DEVOLUCOES) {
+  if (!['falhou', 'tempo', 'sem-teste'].includes(situacao)) return 'seguir';
+  return rodada <= max ? 'devolver' : 'desistir';
+}
+
+// ---------- R27: para quem volta o trabalho ----------
+// Quem escreveu um arquivo citado na saída do teste; se ninguém for citado, todos que executaram.
+export function quemCorrige(resumo, autoria = {}, executores = []) {
+  const texto = String(resumo ?? '');
+  const citados = Object.entries(autoria)
+    .filter(([caminho]) => texto.includes(caminho) || texto.includes(caminho.split('/').pop()))
+    .map(([, id]) => id)
+    .filter((id) => executores.includes(id));
+  return citados.length ? [...new Set(citados)] : [...executores];
+}
+
+// ---------- R28: o que o agente recebe quando o portão devolve ----------
+export function falhaDoPortao(resultado, rodada, max = MAX_DEVOLUCOES) {
+  const tentativa = `Tentativa ${rodada} de ${max + 1}.`;
+  const texto = resultado.situacao === 'sem-teste'
+    ? `${tentativa} Vocês mudaram arquivos, mas o projeto não tem teste automatizado. Escreva um teste da sua parte `
+      + '(ex.: test/<nome>.test.mjs com node:test e node:assert, ou "test" no package.json) e confira que ele passa.'
+    : `${tentativa} O portão rodou \`${resultado.comando}\` e ${resultado.situacao === 'tempo' ? 'o tempo esgotou' : 'os testes falharam'}. `
+      + `Corrija a sua parte para os testes passarem; não apague nem enfraqueça testes.\nSaída (resumo):\n${resultado.resumo || '(sem saída)'}`;
+  return { nome: 'Portão de testes', papel: 'testes automáticos', texto };
+}

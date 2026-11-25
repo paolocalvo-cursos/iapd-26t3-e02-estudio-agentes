@@ -11,7 +11,7 @@ Precisa de Node.js 20+.
 ```bash
 npm install
 npm start      # abre o app (na primeira vez o Electron baixa o próprio executável, ~100 MB)
-npm test       # 30 testes das regras R1–R23
+npm test       # 35 testes das regras R1–R28
 ```
 
 Depois, dê a cada IA uma forma de acesso: chave de API ou CLI logada. Sem assinatura nem crédito,
@@ -26,6 +26,21 @@ use o **modo gratuito**, que precisa só de uma chave grátis do Gemini.
   Erros aparecem em português: chave inválida, modelo inexistente, cota, sem conexão.
 - **Provedor e modelo por agente:** duplo clique no mascote abre o cartão do agente. **Testar agente** faz uma
   chamada de verdade pelo mesmo caminho dos pedidos e mostra falta de crédito, login vencido e modelo errado.
+
+## Portão de testes
+
+Quem roda os testes é o Estúdio, não o agente que escreveu o código.
+
+1. Depois da etapa de execução, se algum arquivo mudou, o Estúdio roda o comando de teste do projeto
+   (`npm test`, `node --test` ou `pytest`; troque com `COMANDO_TESTE` no `.env`). Limite: 2 minutos.
+2. Reprovou: o Maestro devolve para quem escreveu o arquivo citado na falha (ou para todos que executaram),
+   com só as linhas de falha. Até 3 devoluções; depois o time desiste e o Revisor é avisado.
+3. Mudou arquivo e não há teste: reprova e pede um teste.
+4. Se o `test` do `package.json` parecer perigoso (`rm -rf`, `curl | sh`…), ele não roda sozinho: aparece
+   para você aprovar.
+
+O portão roda sem a variável `NODE_TEST_CONTEXT`: herdada, ela faz um `node --test` sair com sucesso mesmo
+com teste falhando. `PORTAO_TESTES=desligado` no `.env` pula o portão.
 
 ## Modo gratuito (sem assinatura)
 
@@ -157,4 +172,5 @@ Abra o app pelo terminal (`npm start`). Assim ele herda o `PATH` onde as CLIs fo
 - Deploy automático na VPS.
 - Memória de projeto.
 - Plano aprovado antes de editar arquivos.
+- Isolamento dos testes: o código de teste que os agentes escrevem roda com as permissões do seu usuário.
 - Revisão linha a linha (diff) dos arquivos alterados. Hoje o app lista os arquivos e os abre.
