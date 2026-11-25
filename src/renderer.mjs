@@ -156,8 +156,11 @@ function desenharMensagens() {
       const origem = m.origem ? `<small> (${esc(m.origem)})</small>` : '';
       const det = m.resumo || m.detalhe
         ? `<details><summary>saída</summary><pre>${esc(m.resumo || '')}</pre>${m.detalhe && m.detalhe !== m.resumo ? `<details><summary>saída completa</summary><pre>${esc(m.detalhe)}</pre></details>` : ''}</details>` : '';
+      const caixa = m.isolado === true ? `<p class="isolamento">🔒 isolado: só a pasta do projeto${m.rede ? '' : ', sem rede'}, sem chaves</p>`
+        : m.isolado === false ? '<p class="isolamento aberta">⚠ rodou SEM isolamento (PORTAO_ISOLAMENTO=desligado)</p>' : '';
+      const motivo = m.motivo ? `<p class="isolamento aberta">${esc(m.motivo)}</p>` : '';
       return `<div class="rodada portao ${ok ? 'passou' : 'falhou'}"><h3>Portão de testes · rodada ${m.rodada}</h3>
-        <p><b>${ROTULO_PORTAO[m.situacao] ?? esc(m.situacao)}</b>${cmd}${origem}${tempo}</p>${det}</div>`;
+        <p><b>${ROTULO_PORTAO[m.situacao] ?? esc(m.situacao)}</b>${cmd}${origem}${tempo}</p>${caixa}${motivo}${det}</div>`;
     }
     if (m.tipo === 'arquivos') {
       return `<div class="rodada arquivos"><h3>Arquivos criados ou alterados</h3>${m.arquivos.length
@@ -227,6 +230,7 @@ async function executar(agente, pedido, anteriores) {
 const ROTULO_PORTAO = {
   passou: '✓ passou', falhou: '✕ falhou', tempo: '✕ tempo esgotado', 'sem-teste': '✕ sem teste',
   bloqueado: '⚠ precisa da sua aprovação', pulou: 'pulou: nada mudou', desligado: 'desligado no .env',
+  'sem-isolamento': '⚠ não rodou: sem caixa de areia',
 };
 
 // Roda a etapa de execução e, enquanto o portão reprovar, devolve o trabalho para quem fez.

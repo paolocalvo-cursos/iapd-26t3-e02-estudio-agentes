@@ -33,4 +33,6 @@ Origem: texto do post (Fernando Nogueira, LinkedIn) e o print do slide da ativid
 | R26 | Depois do portão: passou/pulou → segue; falhou, tempo esgotado ou sem teste → devolve até 3 vezes; depois desiste e avisa o Revisor. | situação, rodada → `seguir/devolver/desistir` | muvuca |
 | R27 | O trabalho volta para quem escreveu o arquivo citado na falha; sem citação, para todos que executaram. | resumo, autoria → agentes | muvuca |
 | R28 | A devolução diz a tentativa, o comando e o resumo, e proíbe apagar ou enfraquecer testes. | resultado → mensagem | muvuca |
+| R29 | Testes rodam no bubblewrap: projeto gravável; `/usr`, `/etc` e o Node só leitura; raiz só leitura; `/tmp` vazio e descartável; sem rede, sem pasta pessoal, ambiente zerado (sem chaves). A pasta do projeto não pode ser a raiz nem conter a pasta pessoal. | projeto → argumentos do `bwrap` | pedido do time |
+| R30 | Sem caixa de areia que passe na sonda, o portão não roda; só roda solto com `PORTAO_ISOLAMENTO=desligado`. | plataforma, sonda, `.env` → `bwrap/bloquear/sem-isolamento` | pedido do time |
 

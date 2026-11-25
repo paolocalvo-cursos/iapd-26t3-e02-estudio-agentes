@@ -163,3 +163,5 @@ dialog .nota { font-size: 11.5px; color: var(--apagado); margin: 0 0 10px; line-
 .rodada.portao.falhou b { color: var(--vermelho); }
 .rodada.portao summary { cursor: pointer; font-size: 11.5px; color: var(--apagado); }
 .rodada.portao pre { max-height: 220px; overflow: auto; font-size: 11px; }
+.rodada.portao .isolamento { font-size: 11px; color: var(--apagado); }
+.rodada.portao .isolamento.aberta { color: #e7c66b; }

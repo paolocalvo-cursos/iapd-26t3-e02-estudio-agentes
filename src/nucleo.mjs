@@ -465,6 +465,7 @@ export function resumirSaidaTeste(saida, { maxLinhas = 40, maxColunas = 200 } = 
 // O portão roda no máximo 1 + MAX_DEVOLUCOES vezes; depois disso o time desiste e o revisor é avisado.
 export const MAX_DEVOLUCOES = 3;
 
+// "sem-isolamento" (não havia caixa de areia) também segue: o portão não roda e a tela explica.
 export function decidirPortao(situacao, rodada, max = MAX_DEVOLUCOES) {
   if (!['falhou', 'tempo', 'sem-teste'].includes(situacao)) return 'seguir';
   return rodada <= max ? 'devolver' : 'desistir';
@@ -490,4 +491,43 @@ export function falhaDoPortao(resultado, rodada, max = MAX_DEVOLUCOES) {
     : `${tentativa} O portão rodou \`${resultado.comando}\` e ${resultado.situacao === 'tempo' ? 'o tempo esgotou' : 'os testes falharam'}. `
       + `Corrija a sua parte para os testes passarem; não apague nem enfraqueça testes.\nSaída (resumo):\n${resultado.resumo || '(sem saída)'}`;
   return { nome: 'Portão de testes', papel: 'testes automáticos', texto };
+}
+
+// ---------- R29: caixa de areia dos testes (bubblewrap, Linux) ----------
+// O teste enxerga: o sistema só para leitura (/usr, /etc), o Node do usuário só para leitura,
+// a pasta do projeto com escrita e um /tmp vazio. A pasta pessoal (~/.ssh, ~/.config, chaves) não existe
+// lá dentro, a rede fica cortada e o ambiente é zerado (nenhuma chave de API chega ao teste).
+// `raizes`: /bin, /lib… desta máquina, com o alvo quando são atalhos (no Mint e no Ubuntu apontam para /usr).
+export function argumentosIsolamento({ projeto, nodeDir = '', raizes = [], leituraExtra = [], rede = false }) {
+  const a = ['--die-with-parent', '--new-session', '--unshare-all'];
+  if (rede) a.push('--share-net');
+  a.push('--ro-bind', '/usr', '/usr', '--ro-bind', '/etc', '/etc');
+  for (const r of raizes) {
+    if (r.link) a.push('--symlink', r.link, r.caminho); else a.push('--ro-bind', r.caminho, r.caminho);
+  }
+  if (nodeDir && !nodeDir.startsWith('/usr/')) a.push('--ro-bind', nodeDir, nodeDir);
+  for (const p of leituraExtra) a.push('--ro-bind', p, p);
+  a.push('--proc', '/proc', '--dev', '/dev', '--tmpfs', '/tmp', '--dir', '/tmp/casa');
+  // raiz só leitura no fim: escrever fora do projeto e do /tmp descartável falha na hora (EROFS)
+  a.push('--bind', projeto, projeto, '--remount-ro', '/', '--chdir', projeto, '--clearenv');
+  const caminho = [nodeDir && !nodeDir.startsWith('/usr/') ? `${nodeDir}/bin` : '', '/usr/local/bin', '/usr/bin', '/bin'].filter(Boolean).join(':');
+  const env = { PATH: caminho, HOME: '/tmp/casa', TMPDIR: '/tmp', LANG: 'C.UTF-8', CI: '1', FORCE_COLOR: '0', NO_COLOR: '1' };
+  for (const [k, v] of Object.entries(env)) a.push('--setenv', k, v);
+  return a;
+}
+
+// A pasta do projeto vira gravável dentro da caixa: não pode ser a raiz nem conter a pasta pessoal.
+export function pastaIsolavel(projeto, home) {
+  const p = String(projeto ?? '').replace(/\/+$/, '');
+  const h = String(home ?? '').replace(/\/+$/, '');
+  if (!p.startsWith('/') || p === '' || p.split('/').includes('..')) return false;
+  return !(h === p || h.startsWith(p + '/'));
+}
+
+// ---------- R30: o portão roda isolado, ou não roda ----------
+// PORTAO_ISOLAMENTO=desligado no .env é a única forma de rodar sem caixa de areia (escolha consciente).
+export function decidirIsolamento({ plataforma, sondaOk, configuracao = '' }) {
+  if (/^(desligado|off|false|nao|não|0)$/i.test(String(configuracao).trim())) return 'sem-isolamento';
+  if (plataforma === 'linux' && sondaOk) return 'bwrap';
+  return 'bloquear';
 }

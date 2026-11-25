@@ -297,3 +297,42 @@ test('R28 falhaDoPortao explica o que corrigir', () => {
   assert.ok(n.falhaDoPortao({ situacao: 'sem-teste' }, 2).texto.includes('não tem teste'));
   assert.ok(n.falhaDoPortao({ situacao: 'tempo', comando: 'npm test' }, 1).texto.includes('tempo esgotou'));
 });
+
+test('R29 argumentosIsolamento: projeto gravável, resto só leitura, sem rede, ambiente zerado', () => {
+  const a = n.argumentosIsolamento({
+    projeto: '/home/eu/proj', nodeDir: '/home/eu/.nvm/versions/node/v22',
+    raizes: [{ caminho: '/bin', link: 'usr/bin' }, { caminho: '/lib64', link: null }],
+  });
+  const j = a.join(' ');
+  assert.ok(j.includes('--unshare-all') && !j.includes('--share-net'));
+  assert.ok(j.includes('--die-with-parent') && j.includes('--new-session') && j.includes('--clearenv'));
+  assert.ok(j.includes('--bind /home/eu/proj /home/eu/proj') && j.includes('--chdir /home/eu/proj'));
+  assert.ok(j.includes('--ro-bind /home/eu/.nvm/versions/node/v22 /home/eu/.nvm/versions/node/v22'));
+  assert.ok(j.includes('--symlink usr/bin /bin') && j.includes('--ro-bind /lib64 /lib64'));
+  assert.ok(!/--bind \/home\/eu /.test(j.replace('--bind /home/eu/proj', ''))); // a pasta pessoal não entra
+  assert.ok(j.includes('--setenv PATH /home/eu/.nvm/versions/node/v22/bin:/usr/local/bin:/usr/bin:/bin'));
+  assert.ok(!/API_KEY/.test(j));
+  assert.ok(a.indexOf('--tmpfs') < a.indexOf('--bind')); // o projeto entra depois do /tmp vazio (projeto pode estar em /tmp)
+  assert.ok(a.indexOf('--remount-ro') > a.lastIndexOf('--bind')); // raiz vira só leitura depois de montar tudo
+  assert.ok(n.argumentosIsolamento({ projeto: '/p', rede: true }).includes('--share-net'));
+  assert.ok(!n.argumentosIsolamento({ projeto: '/p', nodeDir: '/usr/lib/node' }).join(' ').includes('--ro-bind /usr/lib/node'));
+});
+
+test('R29 pastaIsolavel recusa a raiz, a pasta pessoal e quem a contém', () => {
+  assert.equal(n.pastaIsolavel('/home/eu/projetos/x', '/home/eu'), true);
+  assert.equal(n.pastaIsolavel('/tmp/proj', '/home/eu'), true);
+  assert.equal(n.pastaIsolavel('/home/eu', '/home/eu'), false);
+  assert.equal(n.pastaIsolavel('/home/eu/', '/home/eu'), false);
+  assert.equal(n.pastaIsolavel('/home', '/home/eu'), false);
+  assert.equal(n.pastaIsolavel('/', '/home/eu'), false);
+  assert.equal(n.pastaIsolavel('relativa/x', '/home/eu'), false);
+  assert.equal(n.pastaIsolavel('/home/eu/a/../..', '/home/eu'), false);
+});
+
+test('R30 decidirIsolamento: caixa de areia ou nada, salvo desligado de propósito', () => {
+  assert.equal(n.decidirIsolamento({ plataforma: 'linux', sondaOk: true }), 'bwrap');
+  assert.equal(n.decidirIsolamento({ plataforma: 'linux', sondaOk: false }), 'bloquear');
+  assert.equal(n.decidirIsolamento({ plataforma: 'win32', sondaOk: true }), 'bloquear');
+  assert.equal(n.decidirIsolamento({ plataforma: 'darwin', sondaOk: false, configuracao: 'desligado' }), 'sem-isolamento');
+  assert.equal(n.decidirPortao('sem-isolamento', 1), 'seguir');
+});

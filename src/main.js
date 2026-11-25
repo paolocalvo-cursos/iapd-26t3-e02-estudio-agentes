@@ -403,31 +403,113 @@ async function listarArquivos(raiz, ignorar, profundidade = 5) {
   return lista;
 }
 
+// ---------- caixa de areia dos testes (R29–R30) ----------
+// O teste roda dentro do bubblewrap: só vê o projeto (com escrita), o sistema e o Node (só leitura).
+const RAIZES = ['/bin', '/sbin', '/lib', '/lib32', '/lib64', '/libx32'];
+
+function raizesDoSistema() {
+  return RAIZES.flatMap((caminho) => {
+    try {
+      const st = fs.lstatSync(caminho);
+      return [{ caminho, link: st.isSymbolicLink() ? fs.readlinkSync(caminho) : null }];
+    } catch { return []; }
+  });
+}
+
+// Pasta de instalação do Node que o usuário usa (nvm, por exemplo). O Electron não serve: não é o node do terminal.
+function pastaDoNode(env) {
+  try {
+    const bin = execFileSync('sh', ['-c', 'command -v node'], { env, encoding: 'utf8' }).trim();
+    return bin ? path.dirname(path.dirname(fs.realpathSync(bin))) : '';
+  } catch { return ''; }
+}
+
+async function montarCaixa(projeto, env, doArquivo) {
+  const { argumentosIsolamento } = await nucleo;
+  const extra = [path.join(os.homedir(), '.local', 'lib')].filter((p) => fs.existsSync(p)); // pytest instalado com --user
+  const rede = /^(liberada|sim|true|1|on)$/i.test(String(doArquivo.PORTAO_REDE ?? '').trim());
+  return { args: argumentosIsolamento({ projeto, nodeDir: pastaDoNode(env), raizes: raizesDoSistema(), leituraExtra: extra, rede }), rede };
+}
+
+// A sonda prova que a caixa bloqueia de verdade, uma vez por execução do app.
+const ESPERADO_SONDA = ['DENTRO-OK', 'FORA-BLOQUEADO', 'CASA-OCULTA', 'REDE-CORTADA', 'AMBIENTE-LIMPO', 'NODE-OK'];
+let sonda = null;
+function sondarCaixa(env) {
+  sonda ||= (async () => {
+    if (process.platform !== 'linux') return { ok: false, motivo: 'a caixa de areia (bubblewrap) só existe no Linux' };
+    if (!existe('bwrap')) return { ok: false, motivo: 'o bubblewrap não está instalado (sudo apt install bubblewrap)' };
+    const base = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'estudio-sonda-'));
+    const dentro = path.join(base, 'projeto'); const fora = path.join(base, 'fora');
+    await fs.promises.mkdir(dentro); await fs.promises.mkdir(fora);
+    try {
+      const { args } = await montarCaixa(dentro, env, {});
+      const script = [
+        'r=""',
+        'echo x > dentro.txt && r="$r DENTRO-OK"',
+        `( echo x > "${fora}/vazou.txt" ) 2>/dev/null && r="$r FORA-ESCREVEU" || r="$r FORA-BLOQUEADO"`,
+        `[ -e "${path.join(os.homedir(), '.config')}" ] && r="$r CASA-VISIVEL" || r="$r CASA-OCULTA"`,
+        '( exec 3<>/dev/tcp/1.1.1.1/53 ) 2>/dev/null && r="$r REDE-ABERTA" || r="$r REDE-CORTADA"',
+        '[ -z "${SONDA_SEGREDO:-}" ] && r="$r AMBIENTE-LIMPO" || r="$r AMBIENTE-VAZOU"',
+        'node -e "process.stdout.write(String(1+1))" 2>/dev/null | grep -q 2 && r="$r NODE-OK" || r="$r NODE-FALTA"',
+        'echo "$r"',
+      ].join('; ');
+      const r = await rodar('bwrap', [...args, 'bash', '-c', script], dentro, { PATH: env.PATH, SONDA_SEGREDO: 'nao-pode-vazar' }, 20_000);
+      const visto = r.saida.trim().split(/\s+/);
+      const falhas = ESPERADO_SONDA.filter((x) => !visto.includes(x));
+      const vazou = fs.existsSync(path.join(fora, 'vazou.txt'));
+      if (falhas.length || vazou) return { ok: false, motivo: `a caixa de areia não passou na sonda (${[...falhas, vazou ? 'escreveu fora' : ''].filter(Boolean).join(', ')}). ${r.erro}`.trim() };
+      return { ok: true };
+    } finally { await fs.promises.rm(base, { recursive: true, force: true }).catch(() => {}); }
+  })();
+  return sonda;
+}
+
+ipcMain.handle('isolamento', async () => {
+  const { decidirIsolamento } = await nucleo;
+  const { env, doArquivo } = await ambiente();
+  const s = await sondarCaixa(env);
+  return { ...s, decisao: decidirIsolamento({ plataforma: process.platform, sondaOk: s.ok, configuracao: doArquivo.PORTAO_ISOLAMENTO }) };
+});
+
 // ---------- portão de testes (R24–R26) ----------
 // Quem roda os testes é o Estúdio, não o agente. O comando é decidido aqui, nunca pela tela.
 const TEMPO_PORTAO_MS = 120_000;
 
 ipcMain.handle('portao', async (_ev, { pasta, houveMudanca }) => {
-  const { ignorarCaminho, detectarComandoTeste, resumirSaidaTeste } = await nucleo;
+  const { ignorarCaminho, detectarComandoTeste, resumirSaidaTeste, decidirIsolamento, pastaIsolavel } = await nucleo;
   const { env, doArquivo } = await ambiente();
   if (/^(desligado|off|false|nao|não|0)$/i.test(String(doArquivo.PORTAO_TESTES ?? '').trim())) return { situacao: 'desligado' };
   if (!houveMudanca) return { situacao: 'pulou' };
-  const raiz = pastaDoProjeto(pasta);
+  const raiz = path.resolve(pastaDoProjeto(pasta));
   let packageJson = null;
   try { packageJson = await fs.promises.readFile(path.join(raiz, 'package.json'), 'utf8'); } catch { /* sem package.json */ }
   const arquivos = (await listarArquivos(raiz, ignorarCaminho)).map((a) => a.caminho);
   const teste = detectarComandoTeste({ packageJson, arquivos, env: doArquivo });
   if (!teste) return { situacao: 'sem-teste' };
   if (teste.sensivel) return { situacao: 'bloqueado', ...teste };
-  // NODE_TEST_CONTEXT herdado faz um node --test aninhado sair com 0 mesmo falhando (lição do muvuca).
-  const limpo = { ...env, CI: '1', FORCE_COLOR: '0' };
-  delete limpo.NODE_TEST_CONTEXT;
+
+  const sondaCaixa = await sondarCaixa(env);
+  const modo = decidirIsolamento({ plataforma: process.platform, sondaOk: sondaCaixa.ok, configuracao: doArquivo.PORTAO_ISOLAMENTO });
+  if (modo === 'bloquear') return { situacao: 'sem-isolamento', ...teste, motivo: sondaCaixa.motivo };
+  if (modo === 'bwrap' && !pastaIsolavel(raiz, os.homedir())) {
+    return { situacao: 'sem-isolamento', ...teste, motivo: 'a pasta do projeto é a pasta pessoal (ou a contém): escolha uma pasta só do projeto.' };
+  }
   const inicio = Date.now();
-  const r = await rodar('bash', ['-lc', teste.comando], raiz, limpo, TEMPO_PORTAO_MS);
+  let r; let caixa = null;
+  if (modo === 'bwrap') {
+    caixa = await montarCaixa(raiz, env, doArquivo);
+    r = await rodar('bwrap', [...caixa.args, 'bash', '-c', teste.comando], raiz, { PATH: env.PATH }, TEMPO_PORTAO_MS);
+  } else {
+    // NODE_TEST_CONTEXT herdado faz um node --test aninhado sair com 0 mesmo falhando (lição do muvuca).
+    const limpo = { ...env, CI: '1', FORCE_COLOR: '0' };
+    delete limpo.NODE_TEST_CONTEXT;
+    r = await rodar('bash', ['-lc', teste.comando], raiz, limpo, TEMPO_PORTAO_MS);
+  }
   const bruta = [r.saida, r.erro].filter(Boolean).join('\n');
   return {
     situacao: r.tempoEsgotado ? 'tempo' : r.ok ? 'passou' : 'falhou',
     ...teste, codigo: r.codigo, ms: Date.now() - inicio,
+    isolado: modo === 'bwrap', rede: caixa?.rede ?? true,
     resumo: resumirSaidaTeste(bruta), saida: bruta.slice(-6000),
   };
 });

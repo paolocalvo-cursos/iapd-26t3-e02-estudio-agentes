@@ -11,7 +11,7 @@ Precisa de Node.js 20+.
 ```bash
 npm install
 npm start      # abre o app (na primeira vez o Electron baixa o próprio executável, ~100 MB)
-npm test       # 35 testes das regras R1–R28
+npm test       # 38 testes das regras R1–R30
 ```
 
 Depois, dê a cada IA uma forma de acesso: chave de API ou CLI logada. Sem assinatura nem crédito,
@@ -39,8 +39,24 @@ Quem roda os testes é o Estúdio, não o agente que escreveu o código.
 4. Se o `test` do `package.json` parecer perigoso (`rm -rf`, `curl | sh`…), ele não roda sozinho: aparece
    para você aprovar.
 
-O portão roda sem a variável `NODE_TEST_CONTEXT`: herdada, ela faz um `node --test` sair com sucesso mesmo
-com teste falhando. `PORTAO_TESTES=desligado` no `.env` pula o portão.
+### Testes isolados (caixa de areia)
+
+O código de teste é escrito pelos agentes, então roda isolado no **bubblewrap** (Linux):
+
+| O teste… | |
+|---|---|
+| lê e escreve na pasta do projeto | sim |
+| usa um `/tmp` próprio, apagado no fim | sim |
+| lê o sistema (`/usr`, `/etc`) e o Node | só leitura |
+| vê a sua pasta pessoal (`~/.ssh`, `~/.config`, cofre de chaves) | não: ela não existe lá dentro |
+| acessa a internet | não (`PORTAO_REDE=liberada` libera) |
+| recebe chaves de API do ambiente | não: o ambiente é zerado |
+
+Antes do primeiro uso, uma sonda prova que a caixa bloqueia de verdade. Sem bubblewrap (`sudo apt install bubblewrap`),
+no Windows ou no macOS, o portão **não roda** e a tela explica; `PORTAO_ISOLAMENTO=desligado` roda sem isolamento,
+por sua conta. Os comandos do botão **Executar** continuam fora da caixa: só rodam com o seu clique.
+
+`PORTAO_TESTES=desligado` no `.env` pula o portão.
 
 ## Modo gratuito (sem assinatura)
 
@@ -172,5 +188,5 @@ Abra o app pelo terminal (`npm start`). Assim ele herda o `PATH` onde as CLIs fo
 - Deploy automático na VPS.
 - Memória de projeto.
 - Plano aprovado antes de editar arquivos.
-- Isolamento dos testes: o código de teste que os agentes escrevem roda com as permissões do seu usuário.
+- Isolamento dos testes no Windows e no macOS (lá o portão não roda sem `PORTAO_ISOLAMENTO=desligado`).
 - Revisão linha a linha (diff) dos arquivos alterados. Hoje o app lista os arquivos e os abre.
