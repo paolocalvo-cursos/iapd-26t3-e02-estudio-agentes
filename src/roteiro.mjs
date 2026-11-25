@@ -1,7 +1,7 @@
 // R31: roteiro falso. Uma ponte com a mesma cara da real (preload.js), mas sem modelo, sem disco e sem custo.
 // A orquestração de verdade (rodada, plano, execução, portão, revisão) roda por cima dela e repete a Demo 1:
 // Pedido → Plano → Execução → Testes (o primeiro falha e volta para quem escreveu) → Decisão.
-import { CATALOGO, PROVEDORES } from './nucleo.mjs';
+import { CATALOGO, PROVEDORES, compararFotos, diffLinhas, planoDeDescarte } from './nucleo.mjs';
 
 export const PEDIDO_DO_ROTEIRO = 'Crie uma página de status com um endpoint /health';
 export const COMANDO_DO_ROTEIRO = 'npm test';
@@ -83,7 +83,10 @@ export function criarPonteFalsa({ agentes = [], ritmo = 1 } = {}) {
   const esperar = (ms) => (ritmo > 0 ? new Promise((r) => setTimeout(r, ms * ritmo)) : Promise.resolve());
   const vezes = {};
   const gravados = new Map(); // caminho -> id de quem escreveu por último
+  const conteudos = new Map(); // a "pasta" do roteiro: caminho -> conteúdo
+  const fotos = new Map(); // id -> cópia de `conteudos`
   let portoes = 0;
+  const comoHashes = (m) => Object.fromEntries(m); // no roteiro, o próprio conteúdo serve de hash
 
   // Arquivo que a falha cita: o server.js se alguém o escreveu; senão, o primeiro gravado.
   const citado = () => (gravados.has('server.js') ? 'server.js' : [...gravados.keys()][0]);
@@ -100,7 +103,7 @@ export function criarPonteFalsa({ agentes = [], ritmo = 1 } = {}) {
       await esperar(1400 + 500 * (agentes.indexOf(agente) % 3));
       const fala = FALAS[agente.id]?.(vez) ?? falaGenerica(agente, escrita, vez);
       const caminhos = escrita ? Object.keys(fala.arquivos ?? {}) : [];
-      caminhos.forEach((c) => gravados.set(c, agente.id));
+      caminhos.forEach((c) => { gravados.set(c, agente.id); conteudos.set(c, fala.arquivos[c]); });
       return { ok: true, saida: fala.texto, modo: 'roteiro', modelo: CATALOGO[agente.provedor]?.modelo, gravados: caminhos };
     },
 
@@ -126,6 +129,40 @@ export function criarPonteFalsa({ agentes = [], ritmo = 1 } = {}) {
       }
       const resumo = '✔ /health responde JSON\nℹ tests 1 · pass 1 · fail 0';
       return { ...base, situacao: 'passou', codigo: 0, resumo, saida: resumo };
+    },
+
+    // R32–R35 no roteiro: a foto é uma cópia do mapa em memória.
+    async tirarFoto() {
+      const id = `roteiro-${fotos.size + 1}`;
+      fotos.set(id, new Map(conteudos));
+      return { id, arquivos: conteudos.size, grandes: [] };
+    },
+
+    async diffFoto({ id } = {}) {
+      const foto = fotos.get(id);
+      if (!foto) return { erro: 'a foto desta rodada não existe mais' };
+      const m = compararFotos(comoHashes(foto), comoHashes(conteudos));
+      const diffs = [['criado', m.criados], ['alterado', m.alterados], ['removido', m.removidos]].flatMap(([tipo, lista]) => lista.map((c) => {
+        const texto = diffLinhas(foto.get(c) ?? '', conteudos.get(c) ?? '');
+        const linhas = texto ? texto.split('\n') : [];
+        return { caminho: c, tipo, texto, mais: linhas.filter((l) => l.startsWith('+')).length, menos: linhas.filter((l) => l.startsWith('-')).length };
+      }));
+      return { ...m, diffs, grandesNovos: [] };
+    },
+
+    async manterFoto({ id } = {}) {
+      fotos.delete(id);
+      return true;
+    },
+
+    async descartarFoto({ id } = {}) {
+      const foto = fotos.get(id);
+      if (!foto) return { erro: 'a foto desta rodada não existe mais' };
+      const plano = planoDeDescarte(compararFotos(comoHashes(foto), comoHashes(conteudos)));
+      plano.apagar.forEach((c) => { conteudos.delete(c); gravados.delete(c); });
+      plano.restaurar.forEach((c) => conteudos.set(c, foto.get(c)));
+      fotos.delete(id);
+      return { apagados: plano.apagar, restaurados: plano.restaurar };
     },
 
     async executarComando({ comando } = {}) {

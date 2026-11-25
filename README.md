@@ -31,6 +31,17 @@ conferir a orquestração sem custo. Ligue o 🎬 e aperte Enter com a caixa vaz
 
 As falas ficam em `src/roteiro.mjs` (R31). O painel 🔑 e o "Testar agente" continuam usando os provedores de verdade.
 
+## Manter ou descartar (passo 5)
+
+Antes de cada pedido, o Estúdio tira uma foto da pasta do projeto. No fim, o card **Decisão** mostra cada arquivo
+criado (`+`), alterado (`~`) ou removido (`−`), com o diff. A partir daí você escolhe:
+
+- **Manter**: fica tudo como os agentes deixaram.
+- **Descartar** (pede confirmação): apaga o que foi criado e devolve os arquivos alterados ou removidos ao estado de antes do pedido.
+
+O descarte não mexe em `node_modules`, `.git`, `dist` e nas outras pastas ignoradas, nem em arquivos com mais de 2 MB,
+que o card avisa. Mandar um pedido novo sem decidir mantém a rodada anterior. Regras R32 a R35.
+
 ## Chaves e provedores (botão 🔑)
 
 - **Colar a chave pela tela:** o botão 🔑 lista os provedores (Anthropic, Gemini, OpenAI, Groq, OpenRouter e Ollama).
@@ -188,7 +199,7 @@ Abra o app pelo terminal (`npm start`). Assim ele herda o `PATH` onde as CLIs fo
 
 | Arquivo | Papel |
 |---|---|
-| `REGRAS.md` | As regras R1–R31, com entrada, saída e origem. |
+| `REGRAS.md` | As regras R1–R35, com entrada, saída e origem. |
 | `.env.example` | Modelo do `.env`: modo gratuito, chaves e modelos de cada IA. |
 | `src/nucleo.mjs` | **Todas as regras.** Funções puras, sem DOM, Electron nem rede. |
 | `src/renderer.mjs` | Tela: mascotes em SVG, palco, rodada de propostas, chat. |
@@ -196,7 +207,8 @@ Abra o app pelo terminal (`npm start`). Assim ele herda o `PATH` onde as CLIs fo
 | `src/preload.js` | Ponte segura entre a tela e o processo principal. |
 | `src/roteiro.mjs` | Ponte falsa do roteiro (R31): mesma interface do `preload.js`, com falas prontas. |
 | `test/nucleo.test.mjs` | Testes das regras do núcleo. |
-| `test/roteiro.test.mjs` | Testes do roteiro falso: time da Demo 1, falha, devolução e aprovação. |
+| `test/roteiro.test.mjs` | Testes do roteiro falso: time da Demo 1, falha, devolução, aprovação e descarte. |
+| `test/decisao.test.mjs` | Testes da foto, do diff e do plano de descarte (Manter/Descartar). |
 
 ## Fora do escopo (citado no post)
 

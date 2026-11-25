@@ -2,6 +2,7 @@
 // Cada IA usa a sua chave de API (SDK oficial); sem chave, usa a CLI logada na assinatura.
 const { app, BrowserWindow, Menu, dialog, ipcMain, safeStorage, shell } = require('electron');
 const { spawn, execFileSync } = require('node:child_process');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -394,8 +395,8 @@ async function listarArquivos(raiz, ignorar, profundidade = 5) {
       const completo = path.join(dir, it.name);
       if (it.isDirectory()) await andar(completo, nivel + 1);
       else if (it.isFile()) {
-        const { mtimeMs } = await fs.promises.stat(completo);
-        lista.push({ caminho: path.relative(raiz, completo), mtimeMs });
+        const { mtimeMs, size } = await fs.promises.stat(completo);
+        lista.push({ caminho: path.relative(raiz, completo), mtimeMs, tamanho: size });
       }
     }
   }
@@ -526,4 +527,142 @@ ipcMain.handle('abrir', async (_ev, { pasta, caminho }) => {
   const alvo = path.resolve(raiz, String(caminho || '.'));
   if (alvo !== raiz && !alvo.startsWith(raiz + path.sep)) return 'Fora da pasta do projeto';
   return shell.openPath(alvo);
+});
+
+// ---------- Manter/Descartar (R32–R35) ----------
+// Antes de cada pedido, a pasta do projeto é copiada para userData/fotos/<id>. No fim, a tela mostra o diff;
+// "Descartar" apaga o que foi criado e devolve da foto o que mudou ou sumiu. node_modules, .git etc. ficam de fora.
+const PASTA_FOTOS = () => path.join(app.getPath('userData'), 'fotos');
+const MAX_FOTOS = 10;
+const ORCAMENTO_DIFF = 200_000; // caracteres de diff mandados para a tela, somando todos os arquivos
+const hashDe = (buf) => crypto.createHash('sha1').update(buf).digest('hex');
+const dentro = (raiz, alvo) => alvo === raiz || alvo.startsWith(raiz + path.sep);
+
+// Caminho do arquivo a gravar ou apagar: tem de ficar na pasta, sem passar por symlink que leve para fora.
+async function alvoSeguro(raiz, caminho) {
+  const alvo = path.resolve(raiz, caminho);
+  if (!dentro(raiz, alvo)) throw new Error(`fora da pasta do projeto: ${caminho}`);
+  let dir = path.dirname(alvo);
+  while (!fs.existsSync(dir)) dir = path.dirname(dir);
+  if (!dentro(await fs.promises.realpath(raiz), await fs.promises.realpath(dir))) throw new Error(`symlink para fora da pasta: ${caminho}`);
+  try {
+    if ((await fs.promises.lstat(alvo)).isSymbolicLink()) throw new Error(`é um symlink: ${caminho}`);
+  } catch (e) { if (e.code !== 'ENOENT') throw e; }
+  return alvo;
+}
+
+async function estadoDaPasta(raiz) {
+  const { ignorarCaminho, selecionarParaFoto } = await nucleo;
+  const sel = selecionarParaFoto(await listarArquivos(raiz, ignorarCaminho));
+  if (!sel.ok) return sel;
+  const hashes = {};
+  for (const c of sel.incluidos) hashes[c] = hashDe(await fs.promises.readFile(path.join(raiz, c)));
+  return { ...sel, hashes };
+}
+
+async function lerFoto(id) {
+  const { idDeFotoValido } = await nucleo;
+  if (!idDeFotoValido(id)) throw new Error('foto inválida');
+  const dir = path.join(PASTA_FOTOS(), id);
+  try {
+    return { dir, ...JSON.parse(await fs.promises.readFile(path.join(dir, 'foto.json'), 'utf8')) };
+  } catch {
+    throw new Error('a foto desta rodada não existe mais');
+  }
+}
+
+async function limparFotos() {
+  let nomes = [];
+  try { nomes = (await fs.promises.readdir(PASTA_FOTOS())).filter((x) => /^f\d+-/.test(x)).sort(); } catch { return; }
+  for (const velha of nomes.slice(0, -MAX_FOTOS)) await fs.promises.rm(path.join(PASTA_FOTOS(), velha), { recursive: true, force: true });
+}
+
+ipcMain.handle('foto-tirar', async (_ev, { pasta }) => {
+  const { ignorarCaminho, selecionarParaFoto } = await nucleo;
+  const raiz = path.resolve(pastaDoProjeto(pasta));
+  const sel = selecionarParaFoto(await listarArquivos(raiz, ignorarCaminho));
+  if (!sel.ok) return { erro: sel.motivo };
+  const id = `f${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
+  const dir = path.join(PASTA_FOTOS(), id);
+  const hashes = {};
+  try {
+    for (const c of sel.incluidos) {
+      const conteudo = await fs.promises.readFile(path.join(raiz, c)); // lido uma vez: o hash é do que foi guardado
+      const destino = path.join(dir, 'arquivos', c);
+      await fs.promises.mkdir(path.dirname(destino), { recursive: true });
+      await fs.promises.writeFile(destino, conteudo);
+      hashes[c] = hashDe(conteudo);
+    }
+    await fs.promises.writeFile(path.join(dir, 'foto.json'), JSON.stringify({ raiz, criadaEm: Date.now(), hashes, grandes: sel.grandes }));
+  } catch (e) {
+    await fs.promises.rm(dir, { recursive: true, force: true });
+    return { erro: `não consegui copiar a pasta (${e.message})` };
+  }
+  await limparFotos();
+  return { id, arquivos: sel.incluidos.length, grandes: sel.grandes };
+});
+
+ipcMain.handle('foto-diff', async (_ev, { id, pasta }) => {
+  const { compararFotos, diffLinhas } = await nucleo;
+  try {
+    const foto = await lerFoto(id);
+    const raiz = path.resolve(pastaDoProjeto(pasta));
+    if (raiz !== foto.raiz) return { erro: 'a pasta do projeto mudou depois da foto' };
+    const atual = await estadoDaPasta(raiz);
+    if (!atual.ok) return { erro: atual.motivo };
+    const m = compararFotos(foto.hashes, atual.hashes);
+    const ler = async (base, c, existe) => (existe ? fs.promises.readFile(path.join(base, c), 'utf8') : '');
+    let orcamento = ORCAMENTO_DIFF;
+    const diffs = [];
+    for (const [tipo, lista] of [['criado', m.criados], ['alterado', m.alterados], ['removido', m.removidos]]) {
+      for (const c of lista) {
+        let texto = diffLinhas(await ler(path.join(foto.dir, 'arquivos'), c, c in foto.hashes), await ler(raiz, c, c in atual.hashes));
+        const linhas = texto ? texto.split('\n') : [];
+        const mais = linhas.filter((l) => l.startsWith('+')).length;
+        const menos = linhas.filter((l) => l.startsWith('-')).length;
+        if (texto && texto.length > orcamento) texto = null;
+        if (texto) orcamento -= texto.length;
+        diffs.push({ caminho: c, tipo, texto, mais, menos });
+      }
+    }
+    const grandesNovos = atual.grandes.filter((c) => !foto.grandes.includes(c));
+    return { ...m, diffs, grandesNovos };
+  } catch (e) {
+    return { erro: e.message };
+  }
+});
+
+ipcMain.handle('foto-manter', async (_ev, { id }) => {
+  const { idDeFotoValido } = await nucleo;
+  if (idDeFotoValido(id)) await fs.promises.rm(path.join(PASTA_FOTOS(), id), { recursive: true, force: true });
+  return true;
+});
+
+ipcMain.handle('foto-descartar', async (_ev, { id, pasta }) => {
+  const { compararFotos, planoDeDescarte } = await nucleo;
+  try {
+    const foto = await lerFoto(id);
+    const raiz = path.resolve(pastaDoProjeto(pasta));
+    if (raiz !== foto.raiz) return { erro: 'a pasta do projeto mudou depois da foto' };
+    const atual = await estadoDaPasta(raiz);
+    if (!atual.ok) return { erro: atual.motivo };
+    const plano = planoDeDescarte(compararFotos(foto.hashes, atual.hashes));
+    const alvos = { apagar: [], restaurar: [] }; // confere tudo antes de mexer em qualquer arquivo
+    for (const c of plano.apagar) alvos.apagar.push(await alvoSeguro(raiz, c));
+    for (const c of plano.restaurar) alvos.restaurar.push([c, await alvoSeguro(raiz, c)]);
+    for (const alvo of alvos.apagar) {
+      await fs.promises.unlink(alvo);
+      for (let d = path.dirname(alvo); d !== raiz && dentro(raiz, d); d = path.dirname(d)) {
+        try { await fs.promises.rmdir(d); } catch { break; } // só some pasta que ficou vazia
+      }
+    }
+    for (const [c, alvo] of alvos.restaurar) {
+      await fs.promises.mkdir(path.dirname(alvo), { recursive: true });
+      await fs.promises.copyFile(path.join(foto.dir, 'arquivos', c), alvo);
+    }
+    await fs.promises.rm(foto.dir, { recursive: true, force: true });
+    return { apagados: plano.apagar, restaurados: plano.restaurar };
+  } catch (e) {
+    return { erro: e.message };
+  }
 });

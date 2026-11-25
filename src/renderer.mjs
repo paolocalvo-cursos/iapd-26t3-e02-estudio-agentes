@@ -16,6 +16,7 @@ let conversas = salvo('conversas', []);
 let atual = conversas[0] ?? n.novaConversa();
 let pasta = salvo('pasta', null); // null = pasta padrão (~/estudio-projetos)
 let roteiro = salvo('roteiro', false);
+let pendente = salvo('pendente', null); // R35: { id, conversa } da rodada que espera Manter/Descartar
 let pastaPadrao = '';
 
 // ---------- estado da tela ----------
@@ -25,6 +26,7 @@ let ocupado = false;
 let provedores = { modos: {}, chaves: [] };
 const baloes = new Map();
 const saidas = new Map(); // comando executado -> saída
+let confirmando = null; // id da foto cujo Descartar espera o segundo clique
 
 function persistir() {
   conversas = [atual, ...conversas.filter((c) => c.id !== atual.id)].filter((c) => c.mensagens.length).slice(0, 30);
@@ -32,6 +34,7 @@ function persistir() {
   localStorage.setItem('agentes', JSON.stringify(agentes));
   localStorage.setItem('pasta', JSON.stringify(pasta));
   localStorage.setItem('roteiro', JSON.stringify(roteiro));
+  localStorage.setItem('pendente', JSON.stringify(pendente));
 }
 
 // ---------- mascotes (SVG) ----------
@@ -171,6 +174,7 @@ function desenharMensagens() {
       return `<div class="rodada portao ${ok ? 'passou' : 'falhou'}"><h3>Portão de testes · rodada ${m.rodada}</h3>
         <p><b>${ROTULO_PORTAO[m.situacao] ?? esc(m.situacao)}</b>${cmd}${origem}${tempo}</p>${caixa}${motivo}${det}</div>`;
     }
+    if (m.tipo === 'decisao') return desenharDecisao(m);
     if (m.tipo === 'arquivos') {
       return `<div class="rodada arquivos"><h3>Arquivos criados ou alterados</h3>${m.arquivos.length
         ? m.arquivos.map((f) => `<button data-abrir="${esc(f)}">📄 ${esc(f)}</button>`).join('')
@@ -187,6 +191,80 @@ function desenharMensagens() {
   caixa.innerHTML = html || '<p class="vazio">Peça algo ao time.<br>Ex.: “Crie uma página de status com um endpoint /health”.</p>';
   caixa.scrollTop = caixa.scrollHeight;
   $('titulo-conversa').textContent = atual.titulo;
+}
+
+// ---------- R35: card da decisão (passo 5) ----------
+const SINAL = { criado: '+', alterado: '~', removido: '−' };
+
+function linhasDoDiff(texto) {
+  return texto.split('\n').map((l) => {
+    const c = l.startsWith('@@') ? 'trecho' : l[0] === '+' ? 'mais' : l[0] === '-' ? 'menos' : '';
+    return `<span class="${c}">${esc(l) || ' '}</span>`;
+  }).join(''); // cada linha é um bloco: sem \n entre elas
+}
+
+function desenharDecisao(m) {
+  if (m.estado === 'nada') {
+    return '<div class="rodada decisao"><h3>Decisão</h3><p>Nada mudou na pasta do projeto.</p><button data-abrir="" class="pasta">📁 Abrir a pasta</button></div>';
+  }
+  const conta = (lista, um, varios) => (lista.length ? `${lista.length} ${lista.length > 1 ? varios : um}` : '');
+  const placar = [conta(m.criados, 'criado', 'criados'), conta(m.alterados, 'alterado', 'alterados'), conta(m.removidos, 'removido', 'removidos')].filter(Boolean).join(' · ');
+  const arquivos = m.diffs.map((d) => `<details class="diff-arquivo ${d.tipo}"><summary><b>${SINAL[d.tipo]}</b> ${esc(d.caminho)} <small>${d.mais ? `+${d.mais}` : ''} ${d.menos ? `−${d.menos}` : ''}</small>${d.tipo !== 'removido' ? `<button type="button" data-abrir="${esc(d.caminho)}" title="Abrir">↗</button>` : ''}</summary>
+    ${d.texto ? `<pre class="diff">${linhasDoDiff(d.texto)}</pre>` : '<p class="nota">Binário ou grande demais para mostrar aqui.</p>'}</details>`).join('');
+  const grandes = m.grandesNovos?.length ? `<p class="nota">⚠ Fora da foto (mais de 2 MB), o Descartar não mexe: ${m.grandesNovos.map(esc).join(', ')}</p>` : '';
+  const ativa = m.estado === 'pendente' && pendente?.id === m.foto;
+  let acoes;
+  if (m.estado === 'mantido') acoes = `<p class="veredito ok">✓ Mantido${m.automatico ? ' (um novo pedido chegou antes da decisão)' : ''}.</p>`;
+  else if (m.estado === 'descartado') acoes = `<p class="veredito">↩ Descartado: a pasta voltou a como estava antes do pedido (${m.resultado.apagados.length} apagado(s), ${m.resultado.restaurados.length} restaurado(s)).</p>`;
+  else if (!ativa) acoes = '<p class="nota">Esta decisão não está mais disponível.</p>';
+  else if (confirmando === m.foto) {
+    acoes = `<p class="aviso-descarte">Descartar apaga ${m.criados.length} arquivo(s) criado(s) e devolve ${m.alterados.length + m.removidos.length} ao estado de antes do pedido. Não dá para desfazer.</p>
+      <div class="botoes"><button type="button" class="perigo" data-decidir="descartar">Sim, descartar</button><button type="button" data-decidir="cancelar">Cancelar</button></div>`;
+  } else {
+    acoes = `<div class="botoes"><button type="button" class="primario" data-decidir="manter" ${ocupado ? 'disabled' : ''}>Manter</button><button type="button" data-decidir="confirmar" ${ocupado ? 'disabled' : ''}>Descartar</button></div>`;
+  }
+  return `<div class="rodada decisao ${m.estado}"><h3>Decisão · o que mudou na pasta</h3><p class="placar">${placar}</p>${arquivos}${grandes}${acoes}
+    <button data-abrir="" class="pasta">📁 Abrir a pasta</button></div>`;
+}
+
+function marcarDecisao(id, mudanca) {
+  const mexer = (c) => ({ ...c, mensagens: c.mensagens.map((m) => (m.tipo === 'decisao' && m.foto === id ? { ...m, ...mudanca } : m)) });
+  atual = mexer(atual);
+  conversas = conversas.map(mexer);
+}
+
+// Manter apaga a foto; Descartar devolve a pasta ao que era antes do pedido.
+async function decidir(acao, { automatico = false } = {}) {
+  const p = pendente;
+  if (!p || !ponte) return;
+  if (acao === 'descartar') {
+    const r = await ponte.descartarFoto({ id: p.id, pasta });
+    if (r.erro) { postar({ autor: 'sistema', texto: `Não deu para descartar: ${r.erro}`, erro: true }); return; }
+    marcarDecisao(p.id, { estado: 'descartado', resultado: r });
+  } else {
+    await ponte.manterFoto({ id: p.id });
+    marcarDecisao(p.id, { estado: 'mantido', automatico });
+  }
+  pendente = null; confirmando = null;
+  persistir(); desenharMensagens();
+}
+
+// Fim da rodada: compara a pasta com a foto e abre a decisão. Sem foto, só lista os arquivos (como antes).
+async function fecharRodada(foto, inicio) {
+  marcarPasso('decisao');
+  const d = foto ? await ponte.diffFoto({ id: foto, pasta }) : null;
+  if (!d || d.erro) {
+    if (d?.erro) postar({ autor: 'sistema', texto: `Sem diff desta rodada: ${d.erro}`, erro: true });
+    postar({ autor: 'sistema', tipo: 'arquivos', arquivos: await ponte.arquivosAlterados({ pasta, desde: inicio }) });
+    return;
+  }
+  if (!n.totalDeMudancas(d)) {
+    await ponte.manterFoto({ id: foto });
+    postar({ autor: 'sistema', tipo: 'decisao', estado: 'nada' });
+    return;
+  }
+  pendente = { id: foto, conversa: atual.id };
+  postar({ autor: 'sistema', tipo: 'decisao', foto, estado: 'pendente', ...d });
 }
 
 function desenharTrabalhando() {
@@ -298,10 +376,15 @@ async function enviar(pedido) {
   marcarPasso('pedido');
   postar({ autor: 'voce', texto: pedido });
   const inicio = Date.now() - 1000;
+  let foto = null;
   try {
     if (!ponte) throw new Error('Os agentes só rodam no app desktop (npm start).');
     provedores = await ponte.provedores(); // o .env pode ter mudado
     desenharPalco();
+    if (pendente) await decidir('manter', { automatico: true }); // a foto nova já inclui o que ficou
+    const f = await ponte.tirarFoto({ pasta });
+    if (f.erro) postar({ autor: 'sistema', texto: `Sem foto da pasta (${f.erro}): nesta rodada não vai dar para descartar.`, erro: true });
+    else foto = f.id;
     const alvo = agentes.find((a) => a.id === destino);
     if (alvo) {
       marcarPasso('execucao');
@@ -330,12 +413,11 @@ async function enviar(pedido) {
         anteriores.push(...resultados);
       }
     }
-    const arquivos = await ponte.arquivosAlterados({ pasta, desde: inicio });
-    marcarPasso('decisao');
-    postar({ autor: 'sistema', tipo: 'arquivos', arquivos });
+    await fecharRodada(foto, inicio);
   } catch (e) {
     marcarPasso(null);
     postar({ autor: 'sistema', texto: `Erro: ${e.message}`, erro: true });
+    if (foto && !pendente) await fecharRodada(foto, inicio).catch(() => {}); // o que já mudou também pode ser descartado
   } finally {
     ocupado = false;
     await esperar(2500);
@@ -379,7 +461,19 @@ $('palco').addEventListener('contextmenu', (ev) => {
 });
 
 $('mensagens').addEventListener('click', async (ev) => {
+  const dec = ev.target.closest('[data-decidir]');
+  if (dec) {
+    ev.preventDefault();
+    if (ocupado || !pendente) return;
+    const acao = dec.dataset.decidir;
+    if (acao === 'confirmar') { confirmando = pendente.id; desenharMensagens(); return; }
+    if (acao === 'cancelar') { confirmando = null; desenharMensagens(); return; }
+    dec.disabled = true;
+    await decidir(acao);
+    return;
+  }
   const abrir = ev.target.closest('[data-abrir]');
+  if (abrir) ev.preventDefault(); // o ↗ fica dentro do <summary>: não abre/fecha o diff
   if (abrir && ponte) {
     const falha = await ponte.abrir({ pasta, caminho: abrir.dataset.abrir });
     if (falha) postar({ autor: 'sistema', texto: `Não abriu: ${falha}`, erro: true });
@@ -405,6 +499,7 @@ $('btn-projeto').addEventListener('click', async () => {
 // R31: liga e desliga o roteiro falso. A troca vale a partir do próximo pedido.
 $('btn-roteiro').addEventListener('click', async () => {
   if (ocupado) return;
+  if (pendente) await decidir('manter', { automatico: true }); // a foto pendente é da ponte que vai sair
   roteiro = !roteiro;
   ponte = roteiro ? criarPonteFalsa({ agentes }) : ponteReal;
   provedores = ponte ? await ponte.provedores() : { modos: {}, chaves: [] };

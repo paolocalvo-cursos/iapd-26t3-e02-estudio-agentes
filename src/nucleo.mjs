@@ -532,3 +532,100 @@ export function decidirIsolamento({ plataforma, sondaOk, configuracao = '' }) {
   if (plataforma === 'linux' && sondaOk) return 'bwrap';
   return 'bloquear';
 }
+
+// ---------- R32: foto da pasta antes do pedido ----------
+// Arquivo maior que bytesArquivo fica fora da foto (o descarte não mexe nele) e é avisado.
+// Pasta com arquivos demais ou pesada demais não é fotografada: Descartar fica indisponível naquela rodada.
+export const LIMITES_FOTO = Object.freeze({ arquivos: 2000, bytesArquivo: 2_000_000, bytesTotal: 50_000_000 });
+
+export function selecionarParaFoto(arquivos, limites = LIMITES_FOTO) {
+  const grandes = arquivos.filter((a) => a.tamanho > limites.bytesArquivo).map((a) => a.caminho).sort();
+  const cabem = arquivos.filter((a) => a.tamanho <= limites.bytesArquivo);
+  if (cabem.length > limites.arquivos) {
+    return { ok: false, motivo: `a pasta tem mais de ${limites.arquivos} arquivos`, incluidos: [], grandes };
+  }
+  const total = cabem.reduce((s, a) => s + a.tamanho, 0);
+  if (total > limites.bytesTotal) {
+    return { ok: false, motivo: `a pasta passa de ${Math.round(limites.bytesTotal / 1e6)} MB`, incluidos: [], grandes };
+  }
+  return { ok: true, incluidos: cabem.map((a) => a.caminho).sort(), grandes };
+}
+
+// ---------- R33: o que mudou entre a foto e a pasta ----------
+// antes/depois: { caminho: hash }.
+export function compararFotos(antes, depois) {
+  const a = Object.keys(antes); const d = Object.keys(depois);
+  return {
+    criados: d.filter((c) => !(c in antes)).sort(),
+    alterados: d.filter((c) => c in antes && antes[c] !== depois[c]).sort(),
+    removidos: a.filter((c) => !(c in depois)).sort(),
+  };
+}
+
+export function totalDeMudancas({ criados = [], alterados = [], removidos = [] } = {}) {
+  return criados.length + alterados.length + removidos.length;
+}
+
+// ---------- R34: diff de linhas (formato unificado, 3 linhas de contexto) ----------
+// Devolve '' se nada mudou e null para binário ou arquivo grande demais para comparar linha a linha.
+export function diffLinhas(antes, depois, { contexto = 3, maxCelulas = 4_000_000 } = {}) {
+  if (String(antes).includes('\0') || String(depois).includes('\0')) return null;
+  const linhas = (t) => {
+    if (t === '') return [];
+    const l = String(t).split('\n');
+    if (l.at(-1) === '') l.pop(); // a quebra de linha final não é uma linha a mais
+    return l;
+  };
+  const a = linhas(antes); const b = linhas(depois);
+  let ini = 0;
+  while (ini < a.length && ini < b.length && a[ini] === b[ini]) ini++;
+  let fa = a.length; let fb = b.length;
+  while (fa > ini && fb > ini && a[fa - 1] === b[fb - 1]) { fa--; fb--; }
+  const A = a.slice(ini, fa); const B = b.slice(ini, fb);
+  if (!A.length && !B.length) return '';
+  if (A.length * B.length > maxCelulas) return null;
+
+  // maior subsequência comum, de trás para a frente
+  const t = Array.from({ length: A.length + 1 }, () => new Uint32Array(B.length + 1));
+  for (let i = A.length - 1; i >= 0; i--) {
+    for (let j = B.length - 1; j >= 0; j--) t[i][j] = A[i] === B[j] ? t[i + 1][j + 1] + 1 : Math.max(t[i + 1][j], t[i][j + 1]);
+  }
+  const ops = a.slice(0, ini).map((s) => [' ', s]);
+  let i = 0; let j = 0;
+  while (i < A.length || j < B.length) {
+    if (i < A.length && j < B.length && A[i] === B[j]) { ops.push([' ', A[i]]); i++; j++; }
+    else if (i < A.length && (j === B.length || t[i + 1][j] >= t[i][j + 1])) ops.push(['-', A[i++]]); // "-" antes de "+", como o git
+    else ops.push(['+', B[j++]]);
+  }
+  ops.push(...a.slice(fa).map((s) => [' ', s]));
+
+  // trechos: cada mudança com `contexto` linhas em volta; trechos que se encostam viram um só
+  const mudou = ops.map((o, k) => (o[0] !== ' ' ? k : -1)).filter((k) => k >= 0);
+  const trechos = [];
+  for (const k of mudou) {
+    const de = Math.max(0, k - contexto); const ate = Math.min(ops.length, k + contexto + 1);
+    const ult = trechos.at(-1);
+    if (ult && de <= ult[1]) ult[1] = ate; else trechos.push([de, ate]);
+  }
+  const linhaA = []; const linhaB = []; let la = 1; let lb = 1;
+  ops.forEach(([tipo]) => { linhaA.push(la); linhaB.push(lb); if (tipo !== '+') la++; if (tipo !== '-') lb++; });
+  return trechos.map(([de, ate]) => {
+    const parte = ops.slice(de, ate);
+    const ca = parte.filter((o) => o[0] !== '+').length; const cb = parte.filter((o) => o[0] !== '-').length;
+    const ia = ca ? linhaA[de] : linhaA[de] - 1; const ib = cb ? linhaB[de] : linhaB[de] - 1;
+    return [`@@ -${ia},${ca} +${ib},${cb} @@`, ...parte.map(([tipo, s]) => tipo + s)].join('\n');
+  }).join('\n');
+}
+
+// ---------- R35: descartar restaura a foto ----------
+// Apaga o que foi criado e devolve da foto o que mudou ou sumiu. Caminho inseguro derruba o plano inteiro.
+export function planoDeDescarte({ criados = [], alterados = [], removidos = [] }) {
+  const todos = [...criados, ...alterados, ...removidos];
+  const ruim = todos.find((c) => caminhoSeguro(c) !== c);
+  if (ruim !== undefined) throw new Error(`caminho inseguro no descarte: ${ruim}`);
+  return { apagar: [...criados], restaurar: [...alterados, ...removidos] };
+}
+
+export function idDeFotoValido(id) {
+  return /^[a-z0-9-]{1,64}$/.test(String(id ?? ''));
+}

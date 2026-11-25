@@ -15,4 +15,8 @@ contextBridge.exposeInMainWorld('estudio', {
   testarProvedor: (dados) => ipcRenderer.invoke('provedor-testar', dados),
   portao: (dados) => ipcRenderer.invoke('portao', dados),
   isolamento: () => ipcRenderer.invoke('isolamento'),
+  tirarFoto: (dados) => ipcRenderer.invoke('foto-tirar', dados),
+  diffFoto: (dados) => ipcRenderer.invoke('foto-diff', dados),
+  manterFoto: (dados) => ipcRenderer.invoke('foto-manter', dados),
+  descartarFoto: (dados) => ipcRenderer.invoke('foto-descartar', dados),
 });

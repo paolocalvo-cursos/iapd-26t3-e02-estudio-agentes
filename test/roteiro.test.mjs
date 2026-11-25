@@ -62,3 +62,28 @@ test('R31 o roteiro marca todos os provedores como "roteiro" e não abre arquivo
   assert.ok(n.PROVEDORES.every((x) => modos[x] === 'roteiro'));
   assert.match(await p.abrir({ caminho: 'server.js' }), /roteiro falso/);
 });
+
+test('R35 no roteiro: o diff mostra o que a rodada criou e Descartar esvazia a pasta de novo', async () => {
+  const p = criarPonteFalsa({ agentes: T, ritmo: 0 });
+  const { id } = await p.tirarFoto();
+  await chamar(p, 'chevron'); await chamar(p, 'pixel'); await chamar(p, 'chevron');
+  const d = await p.diffFoto({ id });
+  assert.deepEqual(d.criados, ['public/index.html', 'server.js', 'test/health.test.mjs']);
+  const server = d.diffs.find((x) => x.caminho === 'server.js');
+  assert.match(server.texto, /^\+.*application\/json/m); // a versão corrigida, não a do bug
+  assert.deepEqual(await p.descartarFoto({ id }), { apagados: d.criados, restaurados: [] });
+  assert.deepEqual(await p.arquivosAlterados(), []);
+  assert.match((await p.descartarFoto({ id })).erro, /não existe/);
+});
+
+test('R35 no roteiro: Descartar da 2ª rodada devolve o arquivo da 1ª', async () => {
+  const p = criarPonteFalsa({ agentes: T, ritmo: 0 });
+  await chamar(p, 'chevron'); // 1ª rodada, mantida: server.js com o bug
+  const { id } = await p.tirarFoto();
+  await chamar(p, 'chevron'); // 2ª rodada: a correção
+  const d = await p.diffFoto({ id });
+  assert.deepEqual(d.alterados, ['server.js']);
+  assert.deepEqual(d.diffs[0].texto.split('\n').filter((l) => /^[+-]/.test(l)).length, 2);
+  await p.descartarFoto({ id });
+  assert.equal(n.totalDeMudancas((await p.diffFoto({ id: (await p.tirarFoto()).id }))), 0);
+});

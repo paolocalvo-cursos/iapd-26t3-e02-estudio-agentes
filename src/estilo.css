@@ -174,3 +174,27 @@ dialog .nota { font-size: 11.5px; color: var(--apagado); margin: 0 0 10px; line-
 .passos li.feito { color: var(--texto); }
 .passos li.feito::before { content: "✓ "; opacity: 1; }
 .passos li.atual { background: #e2795b; color: #1a1512; font-weight: 600; }
+
+/* R35: decisão Manter/Descartar */
+.decisao .placar { margin: 0 0 8px; color: var(--apagado); font-size: 12px; }
+.diff-arquivo { margin: 4px 0; border: 1px solid var(--linha); border-radius: 6px; }
+.diff-arquivo summary { padding: 4px 8px; cursor: pointer; font-family: ui-monospace, monospace; font-size: 12px; }
+.diff-arquivo summary b { display: inline-block; width: 1em; }
+.diff-arquivo.criado summary b { color: #7fd69a; } .diff-arquivo.alterado summary b { color: #e7b866; } .diff-arquivo.removido summary b { color: #f08a80; }
+.diff-arquivo summary small { margin-left: 6px; color: var(--apagado); }
+.diff-arquivo summary button { float: right; border: 0; background: none; color: var(--apagado); cursor: pointer; }
+.diff { margin: 0; padding: 6px 8px; max-height: 320px; overflow: auto; font-size: 11px; line-height: 1.45; border-top: 1px solid var(--linha); white-space: pre-wrap; overflow-wrap: anywhere; }
+.diff span { display: block; }
+.diff .mais { color: #8fe0a6; background: #183322; }
+.diff .menos { color: #f4a49b; background: #3a1d1b; }
+.diff .trecho { color: #9a8fd8; }
+.decisao .botoes { display: flex; gap: 8px; margin: 10px 0 6px; }
+.decisao .botoes button { padding: 6px 14px; border-radius: 6px; border: 1px solid var(--linha); background: #24211d; color: var(--texto); cursor: pointer; }
+.decisao .botoes button.primario { background: #2e6b45; border-color: #2e6b45; }
+.decisao .botoes button.perigo { background: #8a2f28; border-color: #8a2f28; }
+.decisao .aviso-descarte { margin: 10px 0 0; color: #f4b3ab; font-size: 12px; }
+.decisao .veredito { margin: 10px 0 6px; font-weight: 600; }
+.decisao .veredito.ok { color: #8fe0a6; }
+.decisao.descartado { opacity: .75; }
+.decisao > .pasta { border: 0; background: none; padding: 3px 0; color: var(--apagado); font-size: 12px; cursor: pointer; }
+.decisao > .pasta:hover { color: var(--amarelo); }
