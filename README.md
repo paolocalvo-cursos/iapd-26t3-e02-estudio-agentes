@@ -11,11 +11,21 @@ Precisa de Node.js 20+.
 ```bash
 npm install
 npm start      # abre o app (na primeira vez o Electron baixa o próprio executável, ~100 MB)
-npm test       # 23 testes das regras R1–R18
+npm test       # 30 testes das regras R1–R23
 ```
 
 Depois, dê a cada IA uma forma de acesso: chave de API ou CLI logada. Sem assinatura nem crédito,
 use o **modo gratuito**, que precisa só de uma chave grátis do Gemini.
+
+## Chaves e provedores (botão 🔑)
+
+- **Colar a chave pela tela:** o botão 🔑 lista os provedores (Anthropic, Gemini, OpenAI, Groq, OpenRouter e Ollama).
+  A chave fica cifrada no cofre do sistema (Keychain, DPAPI ou chaveiro do Linux) e vale mais que a do `.env`.
+  A tela só mostra o começo e os 4 últimos caracteres. Sem cofre disponível, o app não guarda: use o `.env`.
+- **Testar:** confere a chave e o modelo consultando a lista de modelos, sem gerar texto (não custa tokens).
+  Erros aparecem em português: chave inválida, modelo inexistente, cota, sem conexão.
+- **Provedor e modelo por agente:** duplo clique no mascote abre o cartão do agente. **Testar agente** faz uma
+  chamada de verdade pelo mesmo caminho dos pedidos e mostra falta de crédito, login vencido e modelo errado.
 
 ## Modo gratuito (sem assinatura)
 

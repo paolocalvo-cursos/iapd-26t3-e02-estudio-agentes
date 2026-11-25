@@ -12,6 +12,7 @@
     <button class="ativo" title="Estúdio">▣</button>
     <button id="btn-conversas" title="Conversas">☰</button>
     <button id="btn-novo-agente" title="Novo agente">＋</button>
+    <button id="btn-chaves" title="Chaves e provedores">🔑</button>
     <span class="vao"></span>
   </nav>
 
@@ -54,12 +55,39 @@
       <label>Personalidade <input name="personalidade" placeholder="Ex.: Paciente e didático"></label>
       <label>Palavras que ele assume (vírgulas) <input name="palavras" placeholder="sql, tabela, migracao"></label>
       <div class="linha">
-        <label>Provedor <select name="provedor"><option>claude</option><option>gemini</option><option>codex</option></select></label>
+        <label>Provedor <select name="provedor" class="sel-provedor"></select></label>
         <label>Visual <select name="forma"><option value="bloco">Bloco</option><option value="estrela">Estrela</option><option value="nuvem">Nuvem</option></select></label>
         <label>Cor <input type="color" name="cor" value="#5fb3a1"></label>
       </div>
+      <label>Modelo (vazio = padrão do provedor) <input name="modelo" placeholder="padrão" maxlength="80"></label>
       <p id="erro-agente" class="erro"></p>
       <menu><button value="cancelar" formnovalidate>Cancelar</button><button value="criar" class="primario">Criar</button></menu>
+    </form>
+  </dialog>
+
+  <dialog id="dlg-chaves" class="largo">
+    <form method="dialog">
+      <h2>Chaves e provedores</h2>
+      <p class="nota" id="cofre-situacao"></p>
+      <div id="lista-chaves" class="lista-chaves"></div>
+      <p class="nota">"Testar" confere a chave e o modelo sem gerar texto (não custa tokens). Falta de crédito só aparece em "Testar agente", no cartão de cada agente.</p>
+      <menu><button value="fechar" class="primario">Fechar</button></menu>
+    </form>
+  </dialog>
+
+  <dialog id="dlg-editar">
+    <form method="dialog" id="form-editar">
+      <h2 id="editar-titulo">Agente</h2>
+      <p class="nota" id="editar-papel"></p>
+      <label>Provedor <select name="provedor" class="sel-provedor"></select></label>
+      <label>Modelo (vazio = padrão do provedor) <input name="modelo" maxlength="80"></label>
+      <p class="nota" id="editar-acesso"></p>
+      <p id="editar-resultado" class="resultado"></p>
+      <menu>
+        <button type="button" id="btn-testar-agente">Testar agente</button>
+        <button value="cancelar" formnovalidate>Cancelar</button>
+        <button value="salvar" class="primario">Salvar</button>
+      </menu>
     </form>
   </dialog>
 

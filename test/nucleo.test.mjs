@@ -168,3 +168,79 @@ test('R18 no modo gratuito o prompt pede blocos de arquivo, como na API', () => 
   assert.match(n.montarPrompt(T[1], 'crie uma página', [], { modo: 'gratis' }), /```arquivo:caminho\/relativo/);
 });
 
+
+test('R19 catálogo: 6 provedores, CLI só nos três oficiais, Ollama sem chave', () => {
+  assert.deepEqual(n.PROVEDORES, ['claude', 'gemini', 'codex', 'groq', 'openrouter', 'ollama']);
+  assert.deepEqual(n.PROVEDORES_CLI, ['claude', 'gemini', 'codex']);
+  assert.equal(n.CATALOGO.ollama.chave, null);
+  assert.ok(n.PROVEDORES.filter((p) => n.CATALOGO[p].compativel).every((p) => n.CATALOGO[p].baseUrl.startsWith('http')));
+});
+
+test('R19 modo: provedor compatível com chave usa API; Ollama sempre API; sem chave nem CLI, nada', () => {
+  assert.equal(n.modoDoProvedor('groq', ['GROQ_API_KEY'], {}), 'api');
+  assert.equal(n.modoDoProvedor('groq', [], { groq: true }), null); // groq não tem CLI
+  assert.equal(n.modoDoProvedor('ollama', [], {}), 'api');
+  assert.equal(n.modoDoProvedor('inexistente', ['X'], {}), null);
+  assert.equal(n.modoDoProvedor('groq', ['GROQ_API_KEY', 'GEMINI_API_KEY'], {}, true), 'gratis');
+});
+
+test('R20 validarChave: recusa vazia, com espaço e curta; prefixo diferente é só aviso', () => {
+  assert.equal(n.validarChave('claude', '').ok, false);
+  assert.equal(n.validarChave('claude', 'sk-ant-abc def-1234567890123').ok, false);
+  assert.equal(n.validarChave('claude', 'sk-ant-123').ok, false);
+  assert.equal(n.validarChave('ollama', 'qualquer-coisa-longa-1234567').ok, false);
+  assert.equal(n.validarChave('xyz', 'sk-ant-12345678901234567890').ok, false);
+  const boa = n.validarChave('claude', '  sk-ant-api03-ABCDEFGHIJKLMNOPQRSTUV  ');
+  assert.deepEqual([boa.ok, boa.chave, boa.aviso], [true, 'sk-ant-api03-ABCDEFGHIJKLMNOPQRSTUV', '']);
+  const estranha = n.validarChave('groq', 'sk-1234567890abcdefghijklmn');
+  assert.ok(estranha.ok && estranha.aviso.includes('gsk_'));
+});
+
+test('R20 mascararChave mostra só o começo e os 4 últimos', () => {
+  assert.equal(n.mascararChave('sk-ant-api03-ABCDEFGHIJKLMNOPa3f9'), 'sk-ant-…a3f9');
+  assert.equal(n.mascararChave('gsk_ABCDEFGHIJKLMNOPQRSTUV1234'), 'gsk_…1234');
+  assert.equal(n.mascararChave('AIzaSyABCDEFGHIJKLMNOPQRSTU9z8y'), 'AIz…9z8y');
+  assert.equal(n.mascararChave('curta'), '••••');
+  assert.equal(n.mascararChave(''), '');
+  assert.ok(!n.mascararChave('sk-ant-api03-SEGREDO-NO-MEIO-a3f9').includes('SEGREDO'));
+});
+
+test('R21 escolherChave: tela vence .env; sem nenhuma, null', () => {
+  assert.deepEqual(n.escolherChave('claude', { claude: 'da-tela' }, { ANTHROPIC_API_KEY: 'do-env' }),
+    { valor: 'da-tela', fonte: 'tela', variavel: 'ANTHROPIC_API_KEY' });
+  assert.equal(n.escolherChave('claude', {}, { ANTHROPIC_API_KEY: 'do-env' }).fonte, '.env');
+  assert.equal(n.escolherChave('claude', {}, {}), null);
+  assert.equal(n.escolherChave('ollama', { ollama: 'x' }, {}), null);
+});
+
+test('R22 classificarErro traduz os erros comuns', () => {
+  const t = (e) => n.classificarErro(e).tipo;
+  assert.equal(t({ status: 401, tipo: 'authentication_error' }), 'chave');
+  assert.equal(t({ status: 400, mensagem: 'API key not valid. Please pass a valid API key.' }), 'chave'); // Gemini
+  assert.equal(t({ status: 402, tipo: 'billing_error' }), 'credito');
+  assert.equal(t({ status: 400, mensagem: 'Your credit balance is too low to access the Anthropic API' }), 'credito');
+  assert.equal(t({ status: 429, mensagem: 'You exceeded your current quota', codigo: 'insufficient_quota' }), 'credito'); // OpenAI
+  assert.equal(t({ status: 403 }), 'permissao');
+  assert.equal(t({ status: 404, tipo: 'not_found_error', mensagem: 'model: claude-xyz' }), 'modelo');
+  assert.equal(t({ status: 429, tipo: 'rate_limit_error' }), 'cota');
+  assert.equal(t({ mensagem: 'RESOURCE_EXHAUSTED' }), 'cota');
+  assert.equal(t({ mensagem: 'Connection error.', codigo: 'ECONNREFUSED' }), 'conexao');
+  assert.equal(t({ mensagem: 'Request timed out.' }), 'tempo');
+  assert.equal(t({ status: 529, tipo: 'overloaded_error' }), 'servico');
+  assert.equal(n.classificarErro({ mensagem: 'algo estranho\nlinha 2' }).texto, 'algo estranho');
+});
+
+test('R23 modelo do agente: cartão → .env → padrão; editarAgente valida', () => {
+  const pixel = T.find((a) => a.id === 'pixel');
+  assert.equal(n.modeloDoAgente(pixel), 'claude-opus-5-5');
+  assert.equal(n.modeloDoAgente(pixel, { ANTHROPIC_MODEL: 'claude-sonnet-5-5' }), 'claude-sonnet-5-5');
+  const time = n.editarAgente(T, 'pixel', { provedor: 'groq', modelo: ' openai/gpt-oss-20b ' });
+  const novo = time.find((a) => a.id === 'pixel');
+  assert.deepEqual([novo.provedor, novo.modelo], ['groq', 'openai/gpt-oss-20b']);
+  assert.equal(n.modeloDoAgente(novo, { GROQ_MODEL: 'outro' }), 'openai/gpt-oss-20b');
+  assert.equal(n.editarAgente(time, 'pixel', { modelo: '' }).find((a) => a.id === 'pixel').modelo, undefined);
+  assert.throws(() => n.editarAgente(T, 'pixel', { provedor: 'xyz' }), /desconhecido/);
+  assert.throws(() => n.editarAgente(T, 'pixel', { modelo: 'rm -rf /' }), /inválido/);
+  assert.throws(() => n.editarAgente(T, 'ninguem', {}), /não encontrado/);
+  assert.equal(T.find((a) => a.id === 'pixel').provedor, 'claude'); // não altera o original
+});

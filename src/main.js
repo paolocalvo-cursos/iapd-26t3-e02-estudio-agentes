@@ -1,6 +1,6 @@
-// Processo principal: janela, pasta do projeto, chaves do .env e chamadas às IAs.
-// Cada IA usa a sua chave de API do .env (SDK oficial); sem chave, usa a CLI logada na assinatura.
-const { app, BrowserWindow, Menu, dialog, ipcMain, shell } = require('electron');
+// Processo principal: janela, pasta do projeto, chaves (cofre e .env) e chamadas às IAs.
+// Cada IA usa a sua chave de API (SDK oficial); sem chave, usa a CLI logada na assinatura.
+const { app, BrowserWindow, Menu, dialog, ipcMain, safeStorage, shell } = require('electron');
 const { spawn, execFileSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -30,15 +30,53 @@ Menu.setApplicationMenu(Menu.buildFromTemplate([
 app.whenReady().then(criarJanela);
 app.on('window-all-closed', () => app.quit());
 
+// ---------- cofre de chaves (R21) ----------
+// Chaves digitadas na tela ficam cifradas pelo cofre do sistema (safeStorage: Keychain, DPAPI ou
+// o chaveiro do Linux). Se o sistema não oferece cofre de verdade, o Estúdio recusa guardar e
+// orienta usar o .env: nunca grava a chave em texto puro por conta própria.
+const ARQUIVO_COFRE = () => path.join(app.getPath('userData'), 'chaves.json');
+
+function situacaoCofre() {
+  if (!safeStorage.isEncryptionAvailable()) {
+    return { disponivel: false, motivo: 'O sistema não oferece cofre de chaves. Use o .env.' };
+  }
+  if (process.platform === 'linux' && safeStorage.getSelectedStorageBackend?.() === 'basic_text') {
+    return { disponivel: false, motivo: 'Sem chaveiro do sistema (gnome-keyring ou kwallet) ativo: a chave ficaria quase em texto puro. Use o .env ou ative o chaveiro.' };
+  }
+  return { disponivel: true, motivo: '' };
+}
+
+function lerCofreCifrado() {
+  try { return JSON.parse(fs.readFileSync(ARQUIVO_COFRE(), 'utf8')); } catch { return {}; }
+}
+
+function lerCofre() {
+  if (!situacaoCofre().disponivel) return {};
+  const cofre = {};
+  for (const [provedor, cifrada] of Object.entries(lerCofreCifrado())) {
+    try { cofre[provedor] = safeStorage.decryptString(Buffer.from(cifrada, 'base64')); } catch { /* chave de outro usuário ou corrompida */ }
+  }
+  return cofre;
+}
+
+function gravarCofre(cifrado) {
+  fs.mkdirSync(path.dirname(ARQUIVO_COFRE()), { recursive: true });
+  fs.writeFileSync(ARQUIVO_COFRE(), JSON.stringify(cifrado, null, 2), { mode: 0o600 });
+}
+
 // ---------- .env ----------
 // Lido a cada chamada: trocar uma chave não exige reiniciar o app.
 async function ambiente() {
-  const { lerEnv } = await nucleo;
+  const { lerEnv, CATALOGO } = await nucleo;
   let doArquivo = {};
   try { doArquivo = lerEnv(fs.readFileSync(ARQUIVO_ENV, 'utf8')); } catch { /* sem .env: usa os logins */ }
+  const cofre = lerCofre();
+  // chave da tela vale mais que a do .env (R21)
+  const comCofre = { ...doArquivo };
+  for (const [p, valor] of Object.entries(cofre)) if (CATALOGO[p]?.chave) comCofre[CATALOGO[p].chave] = valor;
   // o codex exec aceita a chave como CODEX_API_KEY
-  if (doArquivo.OPENAI_API_KEY && !doArquivo.CODEX_API_KEY) doArquivo.CODEX_API_KEY = doArquivo.OPENAI_API_KEY;
-  return { env: { ...process.env, ...doArquivo }, chaves: Object.keys(doArquivo), doArquivo };
+  if (comCofre.OPENAI_API_KEY) comCofre.CODEX_API_KEY = comCofre.OPENAI_API_KEY;
+  return { env: { ...process.env, ...comCofre }, chaves: Object.keys(comCofre), doArquivo, cofre };
 }
 
 // ---------- provedores ----------
@@ -47,14 +85,17 @@ function existe(cmd) {
 }
 
 // Quem executa escreve na pasta do projeto; pesquisa e revisão só leem.
+// `modelo` só é passado quando o agente tem um modelo próprio (R23).
 const COMANDOS = {
-  claude: (prompt, escrita) => ['claude', ['-p', prompt, '--output-format', 'text',
+  claude: (prompt, escrita, modelo) => ['claude', ['-p', prompt, '--output-format', 'text',
     '--allowedTools', escrita ? 'Read,Grep,Glob,Edit,MultiEdit,Write' : 'Read,Grep,Glob',
-    ...(escrita ? ['--permission-mode', 'acceptEdits'] : [])]],
+    ...(escrita ? ['--permission-mode', 'acceptEdits'] : []), ...(modelo ? ['--model', modelo] : [])]],
   // --skip-trust: em modo -p o gemini recusa pasta "não confiável"; a pasta é a que a pessoa escolheu.
-  gemini: (prompt, escrita) => ['gemini', ['--skip-trust', '--approval-mode', escrita ? 'auto_edit' : 'plan', '-o', 'text', '-p', prompt]],
+  gemini: (prompt, escrita, modelo) => ['gemini', ['--skip-trust', '--approval-mode', escrita ? 'auto_edit' : 'plan', '-o', 'text',
+    ...(modelo ? ['-m', modelo] : []), '-p', prompt]],
   // --skip-git-repo-check: sem ele o codex recusa pastas fora de um repositório git confiável.
-  codex: (prompt, escrita) => ['codex', ['exec', '--sandbox', escrita ? 'workspace-write' : 'read-only', '--skip-git-repo-check', prompt]],
+  codex: (prompt, escrita, modelo) => ['codex', ['exec', '--sandbox', escrita ? 'workspace-write' : 'read-only', '--skip-git-repo-check',
+    ...(modelo ? ['-m', modelo] : []), prompt]],
 };
 
 const COMO_INSTALAR = {
@@ -63,11 +104,19 @@ const COMO_INSTALAR = {
   codex: 'npm install -g @openai/codex',
 };
 
-// ---------- APIs (SDKs oficiais) ----------
-const MODELO_PADRAO = { claude: 'claude-opus-5-5', gemini: 'gemini-3.8-flash', codex: 'gpt-5.5' };
+// ---------- APIs (SDKs oficiais; os compatíveis usam o SDK da OpenAI com outro endereço) ----------
 // Modo gratuito: Flash-Lite tem a maior cota grátis do Gemini (troque com GEMINI_MODELO_GRATUITO).
 const MODELO_GRATUITO = 'gemini-3.5-flash-lite';
-const VAR_MODELO = { claude: 'ANTHROPIC_MODEL', gemini: 'GEMINI_MODEL', codex: 'OPENAI_MODEL' };
+const TEMPO_TESTE_MS = 20_000;
+
+async function clienteCompativel(provedor, chave, env) {
+  const { CATALOGO } = await nucleo;
+  const info = CATALOGO[provedor];
+  const OpenAI = (await import('openai')).default;
+  const baseURL = (info.varUrl && env[info.varUrl]) || info.baseUrl;
+  // o SDK exige uma chave; o Ollama ignora o valor
+  return new OpenAI({ apiKey: chave || 'sem-chave', baseURL, timeout: TEMPO_MAXIMO_MS, maxRetries: 1 });
+}
 
 const API = {
   async claude(prompt, chave, modelo) {
@@ -92,22 +141,68 @@ const API = {
     const r = await new OpenAI({ apiKey: chave }).responses.create({ model: modelo, input: prompt });
     return r.output_text ?? '';
   },
+  async compativel(prompt, chave, modelo, provedor, env) {
+    const cliente = await clienteCompativel(provedor, chave, env);
+    const r = await cliente.chat.completions.create({ model: modelo, messages: [{ role: 'user', content: prompt }] });
+    return r.choices?.[0]?.message?.content ?? '';
+  },
 };
 
-async function chamarApi(provedor, prompt, env, modeloForcado) {
-  const { CHAVE_DO_PROVEDOR } = await nucleo;
-  const modelo = modeloForcado || env[VAR_MODELO[provedor]] || MODELO_PADRAO[provedor];
+// Teste barato (R22): só confere se a chave abre a lista de modelos e se o modelo existe.
+// Não gera texto, então não custa tokens. Falta de crédito só aparece em "Testar agente".
+const CONSULTA = {
+  async claude(chave, modelo) {
+    const Anthropic = (await import('@anthropic-ai/sdk')).default;
+    await new Anthropic({ apiKey: chave, timeout: TEMPO_TESTE_MS, maxRetries: 0 }).models.retrieve(modelo);
+  },
+  async gemini(chave, modelo) {
+    const { GoogleGenAI } = await import('@google/genai');
+    await new GoogleGenAI({ apiKey: chave }).models.get({ model: modelo });
+  },
+  async codex(chave, modelo) {
+    const OpenAI = (await import('openai')).default;
+    await new OpenAI({ apiKey: chave, timeout: TEMPO_TESTE_MS, maxRetries: 0 }).models.retrieve(modelo);
+  },
+  async compativel(chave, modelo, provedor, env) {
+    const cliente = await clienteCompativel(provedor, chave, env);
+    const ids = [];
+    for await (const m of cliente.models.list()) ids.push(m.id);
+    if (!ids.includes(modelo)) return `A chave funciona, mas "${modelo}" não aparece na lista de modelos (${ids.length}). Confira o nome ou use "Testar agente".`;
+    return '';
+  },
+};
+
+function comPrazo(promessa, ms) {
+  let timer;
+  const prazo = new Promise((_, falha) => { timer = setTimeout(() => falha(new Error('timeout: tempo esgotado')), ms); });
+  return Promise.race([promessa, prazo]).finally(() => clearTimeout(timer));
+}
+
+// Erro de qualquer SDK → campos que a regra R22 entende.
+async function traduzirErro(e) {
+  const { classificarErro } = await nucleo;
+  const corpo = e?.error?.error ?? e?.error ?? {};
+  return classificarErro({
+    status: e?.status ?? e?.code,
+    tipo: e?.type ?? corpo.type ?? '',
+    mensagem: e?.message ?? String(e),
+    codigo: [e?.code, corpo.code, e?.cause?.code].filter(Boolean).join(' '),
+  });
+}
+
+async function chamarApi(provedor, prompt, env, modelo) {
+  const { CATALOGO, escolherChave } = await nucleo;
+  const info = CATALOGO[provedor];
+  const chave = info.chave ? escolherChave(provedor, {}, env)?.valor : '';
   try {
-    const saida = (await API[provedor](prompt, env[CHAVE_DO_PROVEDOR[provedor]], modelo)).trim();
+    const saida = info.compativel
+      ? (await API.compativel(prompt, chave, modelo, provedor, env)).trim()
+      : (await API[provedor](prompt, chave, modelo)).trim();
     return { ok: Boolean(saida), saida, erro: saida ? '' : 'resposta vazia', modelo };
   } catch (e) {
-    const limite = (e.status ?? e.code) === 429 || /RESOURCE_EXHAUSTED|quota/i.test(String(e.message));
-    return {
-      ok: false, saida: '', modelo,
-      erro: limite
-        ? `${modelo}: limite de uso atingido (por minuto ou por dia). Espere um pouco ou tente amanhã — no modo gratuito o Google libera a cota de novo à meia-noite do Pacífico.`
-        : `${modelo}: ${e.message}`,
-    };
+    const { tipo, texto } = await traduzirErro(e);
+    const extra = tipo === 'cota' && provedor === 'gemini' ? ' No plano grátis do Gemini a cota diária volta à meia-noite do Pacífico.' : '';
+    return { ok: false, saida: '', modelo, tipoErro: tipo, erro: `${modelo}: ${texto}${extra}` };
   }
 }
 
@@ -124,15 +219,21 @@ async function gravarArquivos(texto, raiz) {
   return gravados;
 }
 
+const cliInstalada = new Map();
+function temCli(p) {
+  if (!cliInstalada.has(p)) cliInstalada.set(p, existe(p));
+  return cliInstalada.get(p);
+}
+
 async function modos() {
-  const { modoDoProvedor, modoGratuitoLigado } = await nucleo;
+  const { modoDoProvedor, modoGratuitoLigado, PROVEDORES, PROVEDORES_CLI } = await nucleo;
   const { chaves, doArquivo, env } = await ambiente();
   const gratuito = modoGratuitoLigado(doArquivo);
-  const clis = gratuito ? {} : Object.fromEntries(Object.keys(COMANDOS).map((p) => [p, existe(p)]));
+  const clis = gratuito ? {} : Object.fromEntries(PROVEDORES_CLI.map((p) => [p, temCli(p)]));
   return {
     chaves, gratuito,
     modeloGratuito: env.GEMINI_MODELO_GRATUITO || MODELO_GRATUITO,
-    modos: Object.fromEntries(Object.keys(COMANDOS).map((p) => [p, modoDoProvedor(p, chaves, clis, gratuito)])),
+    modos: Object.fromEntries(PROVEDORES.map((p) => [p, modoDoProvedor(p, chaves, clis, gratuito)])),
   };
 }
 
@@ -156,34 +257,107 @@ function pastaDoProjeto(pasta) {
   return p;
 }
 
-ipcMain.handle('executar-agente', async (_ev, { provedor, prompt, pasta, escrita }) => {
-  if (!COMANDOS[provedor]) return { ok: false, erro: `Provedor desconhecido: ${provedor}` };
-  const { CHAVE_DO_PROVEDOR } = await nucleo;
+ipcMain.handle('executar-agente', async (_ev, { provedor, modelo: modeloDoAgente, prompt, pasta, escrita }) => {
+  const { CATALOGO, validarModelo } = await nucleo;
+  const info = CATALOGO[provedor];
+  if (!info) return { ok: false, erro: `Provedor desconhecido: ${provedor}` };
+  let proprio;
+  try { proprio = validarModelo(modeloDoAgente); } catch (e) { return { ok: false, erro: e.message }; }
   const estado = await modos();
   const modo = estado.modos[provedor];
   const raiz = pastaDoProjeto(pasta);
   const { env } = await ambiente();
   if (modo === 'gratis') {
-    // todo agente vira Gemini grátis, com a chave GEMINI_API_KEY
+    // todo agente vira Gemini grátis, com a chave GEMINI_API_KEY (o modelo do agente é ignorado)
     const r = await chamarApi('gemini', String(prompt), env, estado.modeloGratuito);
     if (r.ok && escrita) r.gravados = await gravarArquivos(r.saida, raiz);
     return { ...r, modo };
   }
   if (modo === 'api') {
-    const r = await chamarApi(provedor, String(prompt), env);
+    const modelo = proprio || env[info.varModelo] || info.modelo;
+    const r = await chamarApi(provedor, String(prompt), env, modelo);
     if (r.ok && escrita) r.gravados = await gravarArquivos(r.saida, raiz);
     return { ...r, modo };
   }
   if (modo === 'cli') {
-    const [cmd, args] = COMANDOS[provedor](String(prompt), Boolean(escrita));
-    return { ...(await rodar(cmd, args, raiz, env)), modo };
+    const [cmd, args] = COMANDOS[provedor](String(prompt), Boolean(escrita), proprio);
+    return { ...(await rodar(cmd, args, raiz, env)), modo, modelo: proprio || 'padrão da CLI' };
   }
   if (estado.gratuito) {
-    return { ok: false, erro: 'O modo gratuito está ligado (MODO_GRATUITO=true), mas falta a GEMINI_API_KEY no .env. '
-      + 'Crie uma chave grátis em https://aistudio.google.com/app/apikey (sem ativar faturamento).' };
+    return { ok: false, erro: 'O modo gratuito está ligado (MODO_GRATUITO=true), mas falta a chave do Gemini. '
+      + 'Salve uma em 🔑 Chaves ou no .env. Crie grátis em https://aistudio.google.com/app/apikey (sem ativar faturamento).' };
   }
-  return { ok: false, erro: `Sem acesso ao ${provedor}: coloque ${CHAVE_DO_PROVEDOR[provedor]} no .env `
-    + `ou instale e faça login na CLI (${COMO_INSTALAR[provedor]}).` };
+  return { ok: false, erro: `Sem acesso a ${info.rotulo}: salve a chave em 🔑 Chaves (ou ${info.chave} no .env)`
+    + (info.cli ? ` ou instale e faça login na CLI (${COMO_INSTALAR[provedor]}).` : '.') };
+});
+
+// ---------- painel de chaves ----------
+// A tela recebe só a máscara e a origem de cada chave, nunca o valor.
+ipcMain.handle('chaves', async () => {
+  const { CATALOGO, PROVEDORES, escolherChave, mascararChave } = await nucleo;
+  const { doArquivo, cofre } = await ambiente();
+  const estado = await modos();
+  return {
+    cofre: situacaoCofre(),
+    gratuito: estado.gratuito,
+    provedores: PROVEDORES.map((p) => {
+      const info = CATALOGO[p];
+      const escolhida = escolherChave(p, cofre, doArquivo);
+      return {
+        id: p, rotulo: info.rotulo, site: info.site, usaChave: Boolean(info.chave), variavel: info.chave,
+        modeloPadrao: doArquivo[info.varModelo] || info.modelo,
+        mascara: escolhida ? mascararChave(escolhida.valor) : '', fonte: escolhida?.fonte ?? '',
+        temNoEnv: Boolean(info.chave && doArquivo[info.chave]), temNaTela: Boolean(cofre[p]),
+        cli: Boolean(info.cli && temCli(p)), modo: estado.modos[p],
+      };
+    }),
+  };
+});
+
+ipcMain.handle('chave-salvar', async (_ev, { provedor, chave }) => {
+  const { validarChave } = await nucleo;
+  const cofre = situacaoCofre();
+  if (!cofre.disponivel) return { ok: false, erro: cofre.motivo };
+  const v = validarChave(provedor, chave);
+  if (!v.ok) return v;
+  const cifrado = lerCofreCifrado();
+  cifrado[provedor] = safeStorage.encryptString(v.chave).toString('base64');
+  gravarCofre(cifrado);
+  return { ok: true, aviso: v.aviso };
+});
+
+ipcMain.handle('chave-remover', async (_ev, { provedor }) => {
+  const cifrado = lerCofreCifrado();
+  delete cifrado[provedor];
+  gravarCofre(cifrado);
+  return { ok: true };
+});
+
+// Testa chave + modelo sem gerar texto (não custa tokens).
+ipcMain.handle('provedor-testar', async (_ev, { provedor, modelo: pedido }) => {
+  const { CATALOGO, escolherChave, validarModelo } = await nucleo;
+  const info = CATALOGO[provedor];
+  if (!info) return { ok: false, erro: `Provedor desconhecido: ${provedor}` };
+  const { env, doArquivo, cofre } = await ambiente();
+  let modelo;
+  try { modelo = validarModelo(pedido) || doArquivo[info.varModelo] || info.modelo; } catch (e) { return { ok: false, erro: e.message }; }
+  const escolhida = escolherChave(provedor, cofre, doArquivo);
+  if (info.chave && !escolhida) {
+    if (info.cli && temCli(provedor)) {
+      return { ok: true, modelo, fonte: 'cli', aviso: `Sem chave: os agentes usam a CLI "${info.cli}" logada. Use "Testar agente" para conferir o login.` };
+    }
+    return { ok: false, modelo, tipoErro: 'chave', erro: 'Nenhuma chave salva nem CLI instalada.' };
+  }
+  const inicio = Date.now();
+  try {
+    const aviso = info.compativel
+      ? await comPrazo(CONSULTA.compativel(escolhida?.valor, modelo, provedor, env), TEMPO_TESTE_MS)
+      : await comPrazo(CONSULTA[provedor](escolhida.valor, modelo), TEMPO_TESTE_MS);
+    return { ok: true, modelo, fonte: escolhida?.fonte ?? 'local', ms: Date.now() - inicio, aviso: aviso || '' };
+  } catch (e) {
+    const { tipo, texto } = await traduzirErro(e);
+    return { ok: false, modelo, fonte: escolhida?.fonte ?? 'local', ms: Date.now() - inicio, tipoErro: tipo, erro: texto };
+  }
 });
 
 // Só roda depois que a pessoa clicou em Executar/Aprovar na tela.

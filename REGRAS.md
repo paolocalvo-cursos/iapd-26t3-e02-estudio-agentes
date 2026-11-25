@@ -23,3 +23,8 @@ Origem: texto do post (Fernando Nogueira, LinkedIn) e o print do slide da ativid
 | R16 | (modo gratuito desligado) Chave no `.env` → API; sem chave e com CLI → CLI; nenhum → sem acesso. | provedor → `api/cli/null` | pedido do time |
 | R17 | Pela API, blocos ```` ```arquivo:caminho ```` viram arquivos; caminho absoluto ou com `..` é recusado. | texto → arquivos | — |
 | R18 | `MODO_GRATUITO=true` (ou sim, 1, on) no `.env` manda **todos** os agentes para o Gemini grátis com a `GEMINI_API_KEY`; chaves pagas e CLIs são ignoradas. Sem a chave do Gemini, nenhum agente roda. | `.env` → `gratis/null` | pedido do time |
+| R19 | Catálogo: claude, gemini e codex (API oficial e CLI); groq, openrouter e ollama (API compatível com a da OpenAI, sem CLI). Ollama não usa chave. | provedor → como acessar | pedido do time |
+| R20 | Chave digitada na tela: recusa vazia, com espaço ou curta; prefixo diferente só avisa. A tela só vê a máscara (`sk-ant-…a3f9`). | chave → `{ok, erro, aviso}` | pedido do time |
+| R21 | Origem da chave: cofre do sistema (tela) → `.env` → CLI (R16). Sem cofre de verdade, o app não guarda e orienta usar o `.env`. | provedor → `{valor, fonte}` | pedido do time |
+| R22 | Erro do provedor vira texto em português: chave, crédito, permissão, modelo, cota, conexão, tempo, serviço. Crédito vem antes de cota (OpenAI responde 429 `insufficient_quota`). | erro → `{tipo, texto}` | pedido do time |
+| R23 | Cada agente tem provedor e modelo próprios (cartão do agente); modelo: cartão → `.env` → padrão do catálogo. | agente → modelo | pedido do time |

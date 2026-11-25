@@ -78,7 +78,7 @@ const ROTULO_ESTADO = { disponivel: 'Disponível', pensando: 'Pensando', trabalh
 // ---------- desenho ----------
 function desenharPalco() {
   $('palco').innerHTML = agentes.map((a) => `
-    <button class="agente ${destino === a.id ? 'selecionado' : ''}" data-id="${a.id}" data-estado="${estados[a.id] ?? 'disponivel'}" style="--cor:${a.cor}" title="${esc(a.papel)} · ${a.provedor}${a.coordenador ? '' : ' · botão direito remove'}">
+    <button class="agente ${destino === a.id ? 'selecionado' : ''}" data-id="${a.id}" data-estado="${estados[a.id] ?? 'disponivel'}" style="--cor:${a.cor}" title="${esc(a.papel)} · ${a.provedor}${a.modelo ? ' · ' + esc(a.modelo) : ''} · duplo clique: provedor e modelo${a.coordenador ? '' : ' · botão direito remove'}">
       ${baloes.has(a.id) ? `<div class="balao">${esc(baloes.get(a.id))}</div>` : ''}
       ${mascote(a)}
       <span class="nome">${esc(a.nome)}</span><span class="papel">${esc(a.papel)}</span>
@@ -97,7 +97,7 @@ function desenharPalco() {
     $('modo').title = 'MODO_GRATUITO=true no .env: todos usam o Gemini grátis; chaves pagas e CLIs são ignoradas';
   } else {
     $('modo').textContent = usados.map((p) => `${p}: ${ROTULO[provedores.modos[p]] ?? 'sem acesso'}`).join(' · ');
-    $('modo').title = 'API = chave no .env · CLI = login da assinatura na linha de comando';
+    $('modo').title = 'API = chave salva em 🔑 ou no .env · CLI = login da assinatura na linha de comando';
   }
   $('modo').classList.toggle('alerta', !ponte || faltando.length > 0);
   $('modo').classList.toggle('gratis', Boolean(ponte && provedores.gratuito && !faltando.length));
@@ -201,7 +201,7 @@ async function executar(agente, pedido, anteriores) {
   mudarEstado(agente.id, 'trabalhando');
   const modo = provedores.modos[agente.provedor] ?? 'cli';
   const prompt = n.montarPrompt(agente, pedido, anteriores, { modo });
-  const r = await ponte.executarAgente({ provedor: agente.provedor, prompt, pasta, escrita: n.podeEscrever(agente) });
+  const r = await ponte.executarAgente({ provedor: agente.provedor, modelo: agente.modelo, prompt, pasta, escrita: n.podeEscrever(agente) });
   const erro = !r.ok || !r.saida;
   const texto = erro
     ? `${agente.provedor} falhou: ${(r.erro || r.saida || 'sem resposta').trim().split('\n').slice(-3).join('\n')}`
@@ -341,6 +341,155 @@ $('form-agente').addEventListener('submit', (ev) => {
   } catch (e) {
     ev.preventDefault();
     $('erro-agente').textContent = e.message;
+  }
+});
+
+// ---------- provedores nos formulários (R19) ----------
+document.querySelectorAll('.sel-provedor').forEach((sel) => {
+  sel.innerHTML = n.PROVEDORES.map((p) => `<option value="${p}">${esc(n.CATALOGO[p].rotulo)}</option>`).join('');
+});
+
+// ---------- painel de chaves (R20–R22) ----------
+const ROTULO_FONTE = { tela: 'chave salva aqui', '.env': 'chave do .env' };
+
+function seloAcesso(p) {
+  if (p.modo === 'gratis') return '<span class="selo-acesso ok">modo gratuito</span>';
+  if (!p.usaChave) return '<span class="selo-acesso ok">local, sem chave</span>';
+  if (p.mascara) return `<span class="selo-acesso ok" title="${esc(p.variavel)}">${esc(ROTULO_FONTE[p.fonte])} · ${esc(p.mascara)}</span>`;
+  if (p.cli) return '<span class="selo-acesso cli">CLI da assinatura</span>';
+  return '<span class="selo-acesso">sem acesso</span>';
+}
+
+async function desenharChaves() {
+  const dados = await ponte.chaves();
+  $('cofre-situacao').textContent = dados.cofre.disponivel
+    ? 'As chaves digitadas aqui ficam cifradas no cofre do sistema e valem mais que as do .env. A tela nunca mostra a chave inteira.'
+    : `⚠ ${dados.cofre.motivo}`;
+  $('lista-chaves').innerHTML = dados.provedores.map((p) => `
+    <div class="prov" data-prov="${p.id}">
+      <div class="prov-topo"><b>${esc(p.rotulo)}</b>${seloAcesso(p)}<a href="#" data-site="${esc(p.site)}" title="${esc(p.site)}">obter chave ↗</a></div>
+      ${p.usaChave ? `<div class="prov-linha">
+        <input type="password" class="chave" placeholder="${p.temNaTela ? 'trocar a chave salva' : `colar ${esc(p.variavel)}`}" autocomplete="off" spellcheck="false" ${dados.cofre.disponivel ? '' : 'disabled'}>
+        <button type="button" data-acao="salvar" ${dados.cofre.disponivel ? '' : 'disabled'}>Salvar</button>
+        ${p.temNaTela ? '<button type="button" data-acao="remover">Remover</button>' : ''}
+      </div>` : ''}
+      <div class="prov-linha">
+        <input class="modelo" placeholder="${esc(p.modeloPadrao)}" title="Modelo para o teste (vazio = ${esc(p.modeloPadrao)})" spellcheck="false">
+        <button type="button" data-acao="testar">Testar</button>
+      </div>
+      <p class="resultado"></p>
+    </div>`).join('');
+}
+
+function mostrar(alvo, classe, texto) {
+  alvo.className = `resultado ${classe}`;
+  alvo.textContent = texto;
+}
+
+$('btn-chaves').addEventListener('click', async () => {
+  if (!ponte) return;
+  await desenharChaves();
+  $('dlg-chaves').showModal();
+});
+
+$('dlg-chaves').addEventListener('close', async () => { provedores = await ponte.provedores(); desenharPalco(); });
+
+$('lista-chaves').addEventListener('click', async (ev) => {
+  const site = ev.target.closest('[data-site]');
+  if (site) { ev.preventDefault(); return; } // a página não abre links externos; o endereço fica no title
+  const b = ev.target.closest('[data-acao]');
+  const linha = b?.closest('[data-prov]');
+  if (!linha) return;
+  const provedor = linha.dataset.prov;
+  const res = linha.querySelector('.resultado');
+  b.disabled = true;
+  try {
+    if (b.dataset.acao === 'salvar') {
+      const entrada = linha.querySelector('.chave');
+      const r = await ponte.salvarChave({ provedor, chave: entrada.value });
+      entrada.value = ''; // a chave não fica na tela
+      if (!r.ok) { mostrar(res, 'falhou', r.erro); return; }
+      await desenharChaves();
+      mostrar($('lista-chaves').querySelector(`[data-prov="${provedor}"] .resultado`), r.aviso ? 'aviso' : 'ok', r.aviso || 'Chave salva. Clique em Testar para conferir.');
+      provedores = await ponte.provedores(); desenharPalco();
+    } else if (b.dataset.acao === 'remover') {
+      await ponte.removerChave({ provedor });
+      await desenharChaves();
+      provedores = await ponte.provedores(); desenharPalco();
+    } else if (b.dataset.acao === 'testar') {
+      mostrar(res, '', 'Testando…');
+      const r = await ponte.testarProvedor({ provedor, modelo: linha.querySelector('.modelo').value });
+      if (!r.ok) mostrar(res, 'falhou', `✕ ${r.modelo ?? ''}: ${r.erro}`);
+      else if (r.aviso) mostrar(res, 'aviso', `✓ ${r.aviso}`);
+      else mostrar(res, 'ok', `✓ ${r.modelo} respondeu em ${r.ms} ms (${ROTULO_FONTE[r.fonte] ?? r.fonte})`);
+    }
+  } finally {
+    if (b.isConnected) b.disabled = false;
+  }
+});
+
+// ---------- cartão do agente: provedor e modelo (R23) ----------
+let editando = null;
+
+function acessoDoAgente(provedor) {
+  const modo = provedores.modos?.[provedor];
+  if (provedores.gratuito) return 'Modo gratuito ligado: este agente roda no Gemini grátis, qualquer que seja o provedor.';
+  return { api: 'Acesso: chave de API.', cli: 'Acesso: CLI da assinatura.' }[modo]
+    ?? `Sem acesso: salve uma chave em 🔑${n.CATALOGO[provedor]?.cli ? ` ou instale e faça login na CLI "${n.CATALOGO[provedor].cli}"` : ''}.`;
+}
+
+$('palco').addEventListener('dblclick', async (ev) => {
+  const b = ev.target.closest('.agente');
+  const a = b && agentes.find((x) => x.id === b.dataset.id);
+  if (!a || ocupado) return;
+  editando = a.id;
+  if (ponte) { provedores = await ponte.provedores(); desenharPalco(); } // chaves podem ter mudado (.env ou 🔑)
+  const f = $('form-editar');
+  $('editar-titulo').textContent = a.nome;
+  $('editar-papel').textContent = `${a.papel}${a.coordenador ? ' · só responde quando você fala direto com ele' : ''}`;
+  f.provedor.value = a.provedor;
+  f.modelo.value = a.modelo ?? '';
+  f.modelo.placeholder = n.CATALOGO[a.provedor]?.modelo ?? '';
+  $('editar-acesso').textContent = acessoDoAgente(a.provedor);
+  mostrar($('editar-resultado'), '', '');
+  $('dlg-editar').showModal();
+});
+
+$('form-editar').provedor.addEventListener('change', (ev) => {
+  $('form-editar').modelo.placeholder = n.CATALOGO[ev.target.value]?.modelo ?? '';
+  $('editar-acesso').textContent = acessoDoAgente(ev.target.value);
+});
+
+$('form-editar').addEventListener('submit', (ev) => {
+  if (ev.submitter?.value !== 'salvar') return;
+  try {
+    agentes = n.editarAgente(agentes, editando, Object.fromEntries(new FormData(ev.target)));
+    persistir(); desenhar();
+  } catch (e) {
+    ev.preventDefault();
+    mostrar($('editar-resultado'), 'falhou', e.message);
+  }
+});
+
+// Chamada de verdade pelo mesmo caminho dos pedidos: confere login, crédito e modelo.
+$('btn-testar-agente').addEventListener('click', async (ev) => {
+  const f = $('form-editar');
+  const a = agentes.find((x) => x.id === editando);
+  if (!a || !ponte) return;
+  ev.target.disabled = true;
+  mostrar($('editar-resultado'), '', 'Chamando o agente…');
+  const inicio = Date.now();
+  try {
+    provedores = await ponte.provedores();
+    const r = await ponte.executarAgente({
+      provedor: f.provedor.value, modelo: f.modelo.value, pasta, escrita: false,
+      prompt: `Você é ${a.nome}, agente de ${a.papel}. Responda apenas: "oi, estou funcionando".`,
+    });
+    const s = ((Date.now() - inicio) / 1000).toFixed(1);
+    if (r.ok && r.saida) mostrar($('editar-resultado'), 'ok', `✓ ${r.modelo ?? ''} (${r.modo}) em ${s} s: ${r.saida.split('\n')[0].slice(0, 120)}`);
+    else mostrar($('editar-resultado'), 'falhou', `✕ ${(r.erro || r.saida || 'sem resposta').trim().split('\n').slice(-3).join('\n')}`);
+  } finally {
+    ev.target.disabled = false;
   }
 });
 

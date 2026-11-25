@@ -34,7 +34,20 @@ export const TIME_PADRAO = Object.freeze([
   },
 ]);
 
-export const PROVEDORES = Object.freeze(['claude', 'gemini', 'codex']);
+// ---------- R19: catálogo de provedores ----------
+// claude, gemini e codex têm API oficial e CLI. Os demais falam a API compatível com a da OpenAI
+// (endereço próprio, sem CLI). O Ollama roda no computador e não precisa de chave.
+export const CATALOGO = Object.freeze({
+  claude: { rotulo: 'Anthropic (Claude)', chave: 'ANTHROPIC_API_KEY', varModelo: 'ANTHROPIC_MODEL', modelo: 'claude-opus-5-5', cli: 'claude', prefixo: 'sk-ant-', site: 'https://platform.claude.com/settings/keys' },
+  gemini: { rotulo: 'Google (Gemini)', chave: 'GEMINI_API_KEY', varModelo: 'GEMINI_MODEL', modelo: 'gemini-3.8-flash', cli: 'gemini', prefixo: 'AIza', site: 'https://aistudio.google.com/app/apikey' },
+  codex: { rotulo: 'OpenAI (GPT)', chave: 'OPENAI_API_KEY', varModelo: 'OPENAI_MODEL', modelo: 'gpt-5.5', cli: 'codex', prefixo: 'sk-', site: 'https://platform.openai.com/api-keys' },
+  groq: { rotulo: 'Groq (tem plano grátis)', chave: 'GROQ_API_KEY', varModelo: 'GROQ_MODEL', modelo: 'openai/gpt-oss-120b', compativel: true, baseUrl: 'https://api.groq.com/openai/v1', prefixo: 'gsk_', site: 'https://console.groq.com/keys' },
+  openrouter: { rotulo: 'OpenRouter', chave: 'OPENROUTER_API_KEY', varModelo: 'OPENROUTER_MODEL', modelo: 'openrouter/auto', compativel: true, baseUrl: 'https://openrouter.ai/api/v1', prefixo: 'sk-or-', site: 'https://openrouter.ai/keys' },
+  ollama: { rotulo: 'Ollama (local, sem chave)', chave: null, varModelo: 'OLLAMA_MODEL', varUrl: 'OLLAMA_BASE_URL', modelo: 'llama3.2', compativel: true, baseUrl: 'http://localhost:11434/v1', site: 'https://ollama.com/download' },
+});
+
+export const PROVEDORES = Object.freeze(Object.keys(CATALOGO));
+export const PROVEDORES_CLI = Object.freeze(PROVEDORES.filter((p) => CATALOGO[p].cli));
 export const FORMAS = Object.freeze(['bloco', 'estrela', 'nuvem']);
 export const ESTADOS = Object.freeze(['disponivel', 'pensando', 'trabalhando', 'concluido']);
 
@@ -213,7 +226,10 @@ export function criarAgente(agentes, dados) {
   const forma = FORMAS.includes(dados.forma) ? dados.forma : 'bloco';
   const cor = /^#[0-9a-f]{6}$/i.test(dados.cor ?? '') ? dados.cor : '#7aa2f7';
   const palavras = String(dados.palavras ?? '').split(',').map((p) => normalizar(p).trim()).filter(Boolean);
-  return [...agentes, { id, nome, papel, provedor, forma, cor, palavras, personalidade: String(dados.personalidade ?? '').trim() }];
+  const modelo = validarModelo(dados.modelo);
+  const novo = { id, nome, papel, provedor, forma, cor, palavras, personalidade: String(dados.personalidade ?? '').trim() };
+  if (modelo) novo.modelo = modelo;
+  return [...agentes, novo];
 }
 
 export function removerAgente(agentes, id) {
@@ -269,14 +285,117 @@ export function lerEnv(texto) {
 }
 
 // ---------- R16: cada IA usa a sua chave de API; sem chave, a CLI logada ----------
-export const CHAVE_DO_PROVEDOR = Object.freeze({ claude: 'ANTHROPIC_API_KEY', gemini: 'GEMINI_API_KEY', codex: 'OPENAI_API_KEY' });
+export const CHAVE_DO_PROVEDOR = Object.freeze(Object.fromEntries(PROVEDORES.map((p) => [p, CATALOGO[p].chave])));
 
 // No modo gratuito (R18) todos os agentes vão para o Gemini grátis e nada pago é usado.
+// `chaves` = nomes das variáveis com valor, venham do cofre (R21) ou do .env.
 export function modoDoProvedor(provedor, chaves, clis, gratuito = false) {
   if (gratuito) return chaves.includes(CHAVE_DO_PROVEDOR.gemini) ? 'gratis' : null;
-  if (chaves.includes(CHAVE_DO_PROVEDOR[provedor])) return 'api';
-  if (clis[provedor]) return 'cli';
+  const info = CATALOGO[provedor];
+  if (!info) return null;
+  if (!info.chave || chaves.includes(info.chave)) return 'api';
+  if (info.cli && clis[provedor]) return 'cli';
   return null;
+}
+
+// ---------- R20: chave digitada na tela ----------
+// Erro: vazia, com espaço no meio ou curta demais. Prefixo diferente do esperado é só aviso,
+// porque os formatos mudam e a pessoa pode estar usando um gateway.
+export function validarChave(provedor, chave) {
+  const info = CATALOGO[provedor];
+  if (!info) return { ok: false, erro: `Provedor desconhecido: ${provedor}` };
+  if (!info.chave) return { ok: false, erro: `${info.rotulo} não usa chave.` };
+  const c = String(chave ?? '').trim();
+  if (!c) return { ok: false, erro: 'Cole a chave antes de salvar.' };
+  if (/\s/.test(c)) return { ok: false, erro: 'A chave não pode ter espaço ou quebra de linha.' };
+  if (c.length < 20) return { ok: false, erro: 'Chave curta demais: confira se colou inteira.' };
+  const aviso = info.prefixo && !c.startsWith(info.prefixo)
+    ? `Chaves de ${info.rotulo} costumam começar com "${info.prefixo}". Salvei mesmo assim: use "Testar" para conferir.`
+    : '';
+  return { ok: true, chave: c, aviso };
+}
+
+// A tela nunca recebe a chave de volta: só o começo e os 4 últimos caracteres.
+export function mascararChave(chave) {
+  const c = String(chave ?? '');
+  if (!c) return '';
+  if (c.length < 12) return '••••';
+  // prefixo público: até dois pedaços curtos de letras minúsculas (sk-ant-, gsk_, sk-or-)
+  const prefixo = c.match(/^(?:[a-z]{1,5}[-_]){1,2}/)?.[0] ?? c.slice(0, 3);
+  return `${prefixo.slice(0, 8)}…${c.slice(-4)}`;
+}
+
+// ---------- R21: de onde vem a chave ----------
+// Ordem: chave salva pela tela (cofre) → chave do .env → nenhuma (aí vale a CLI, R16).
+export function escolherChave(provedor, cofre = {}, env = {}) {
+  const nome = CATALOGO[provedor]?.chave;
+  if (!nome) return null;
+  if (cofre[provedor]) return { valor: cofre[provedor], fonte: 'tela', variavel: nome };
+  if (env[nome]) return { valor: env[nome], fonte: '.env', variavel: nome };
+  return null;
+}
+
+// ---------- R22: erro do provedor em português ----------
+// Recebe o status HTTP, o tipo de erro da API e a mensagem; devolve o tipo e o que fazer.
+// Crédito vem antes de cota: a OpenAI responde "sem crédito" com 429 insufficient_quota.
+export function classificarErro({ status, tipo = '', mensagem = '', codigo = '' } = {}) {
+  const m = `${tipo} ${mensagem} ${codigo}`;
+  const s = Number(status) || 0;
+  const r = (t, texto) => ({ tipo: t, texto });
+  if (s === 401 || /authentication_error|invalid.{0,20}api.?key|api key not valid|incorrect api key|unauthori[sz]ed/i.test(m)) {
+    return r('chave', 'Chave inválida ou revogada. Gere outra no site do provedor e salve de novo.');
+  }
+  if (s === 402 || /billing_error|credit balance|insufficient_quota|insufficient credits|payment required/i.test(m)) {
+    return r('credito', 'Sem crédito na conta da API. Coloque crédito, use outra chave ou a CLI da assinatura.');
+  }
+  if (s === 403 || /permission_error|permission denied|forbidden/i.test(m)) {
+    return r('permissao', 'A chave não tem permissão para este modelo ou região.');
+  }
+  if (s === 404 || /not_found_error|model.{0,40}(not found|does not exist|not exist|não existe)|unknown model/i.test(m)) {
+    return r('modelo', 'Modelo não encontrado para esta chave. Confira o nome do modelo.');
+  }
+  if (s === 429 || /rate_limit|rate limit|RESOURCE_EXHAUSTED|quota/i.test(m)) {
+    return r('cota', 'Limite de uso atingido (por minuto ou por dia). Espere um pouco e tente de novo.');
+  }
+  if (/ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ECONNRESET|fetch failed|connection error|network/i.test(m)) {
+    return r('conexao', 'Sem conexão com o provedor. Confira a internet (ou, no Ollama, se ele está aberto).');
+  }
+  if (/timeout|timed out|ETIMEDOUT|aborted|tempo esgotado/i.test(m)) {
+    return r('tempo', 'O provedor demorou demais para responder. Tente de novo.');
+  }
+  if (s >= 500 || /overloaded/i.test(m)) {
+    return r('servico', 'O provedor está instável agora. Tente de novo em instantes.');
+  }
+  return r('outro', String(mensagem || 'Erro desconhecido.').split('\n')[0].slice(0, 200));
+}
+
+// ---------- R23: provedor e modelo de cada agente ----------
+// Modelo do agente: o escolhido no cartão dele → o do .env → o padrão do catálogo.
+export function validarModelo(modelo) {
+  const m = String(modelo ?? '').trim();
+  if (!m) return '';
+  if (m.length > 80 || !/^[A-Za-z0-9._:/@-]+$/.test(m)) throw new Error('Nome de modelo inválido: use letras, números e . _ : / @ -');
+  return m;
+}
+
+export function modeloDoAgente(agente, env = {}) {
+  const info = CATALOGO[agente?.provedor];
+  if (!info) return '';
+  return agente.modelo || env[info.varModelo] || info.modelo;
+}
+
+export function editarAgente(agentes, id, dados) {
+  const alvo = agentes.find((a) => a.id === id);
+  if (!alvo) throw new Error('Agente não encontrado.');
+  const provedor = dados.provedor ?? alvo.provedor;
+  if (!PROVEDORES.includes(provedor)) throw new Error(`Provedor desconhecido: ${provedor}`);
+  const modelo = validarModelo(dados.modelo ?? alvo.modelo);
+  return agentes.map((a) => {
+    if (a.id !== id) return a;
+    const novo = { ...a, provedor };
+    if (modelo) novo.modelo = modelo; else delete novo.modelo;
+    return novo;
+  });
 }
 
 // ---------- R18: chave que liga o modo gratuito ----------

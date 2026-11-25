@@ -9,4 +9,8 @@ contextBridge.exposeInMainWorld('estudio', {
   pastaPadrao: () => ipcRenderer.invoke('pasta-padrao'),
   arquivosAlterados: (dados) => ipcRenderer.invoke('arquivos-alterados', dados),
   abrir: (dados) => ipcRenderer.invoke('abrir', dados),
+  chaves: () => ipcRenderer.invoke('chaves'),
+  salvarChave: (dados) => ipcRenderer.invoke('chave-salvar', dados),
+  removerChave: (dados) => ipcRenderer.invoke('chave-remover', dados),
+  testarProvedor: (dados) => ipcRenderer.invoke('provedor-testar', dados),
 });
