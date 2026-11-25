@@ -39,7 +39,7 @@ export const TIME_PADRAO = Object.freeze([
 // (endereço próprio, sem CLI). O Ollama roda no computador e não precisa de chave.
 export const CATALOGO = Object.freeze({
   claude: { rotulo: 'Anthropic (Claude)', chave: 'ANTHROPIC_API_KEY', varModelo: 'ANTHROPIC_MODEL', modelo: 'claude-opus-5-5', cli: 'claude', prefixo: 'sk-ant-', site: 'https://platform.claude.com/settings/keys' },
-  gemini: { rotulo: 'Google (Gemini)', chave: 'GEMINI_API_KEY', varModelo: 'GEMINI_MODEL', modelo: 'gemini-3.8-flash', cli: 'gemini', prefixo: 'AIza', site: 'https://aistudio.google.com/app/apikey' },
+  gemini: { rotulo: 'Google (Gemini)', chave: 'GEMINI_API_KEY', varModelo: 'GEMINI_MODEL', modelo: 'gemini-3.8-flash', cli: 'gemini', prefixo: ['AIza', 'AQ.'], site: 'https://aistudio.google.com/app/apikey' },
   codex: { rotulo: 'OpenAI (GPT)', chave: 'OPENAI_API_KEY', varModelo: 'OPENAI_MODEL', modelo: 'gpt-5.5', cli: 'codex', prefixo: 'sk-', site: 'https://platform.openai.com/api-keys' },
   groq: { rotulo: 'Groq (tem plano grátis)', chave: 'GROQ_API_KEY', varModelo: 'GROQ_MODEL', modelo: 'openai/gpt-oss-120b', compativel: true, baseUrl: 'https://api.groq.com/openai/v1', prefixo: 'gsk_', site: 'https://console.groq.com/keys' },
   openrouter: { rotulo: 'OpenRouter', chave: 'OPENROUTER_API_KEY', varModelo: 'OPENROUTER_MODEL', modelo: 'openrouter/auto', compativel: true, baseUrl: 'https://openrouter.ai/api/v1', prefixo: 'sk-or-', site: 'https://openrouter.ai/keys' },
@@ -309,8 +309,9 @@ export function validarChave(provedor, chave) {
   if (!c) return { ok: false, erro: 'Cole a chave antes de salvar.' };
   if (/\s/.test(c)) return { ok: false, erro: 'A chave não pode ter espaço ou quebra de linha.' };
   if (c.length < 20) return { ok: false, erro: 'Chave curta demais: confira se colou inteira.' };
-  const aviso = info.prefixo && !c.startsWith(info.prefixo)
-    ? `Chaves de ${info.rotulo} costumam começar com "${info.prefixo}". Salvei mesmo assim: use "Testar" para conferir.`
+  const prefixos = [info.prefixo ?? []].flat();
+  const aviso = prefixos.length && !prefixos.some((p) => c.startsWith(p))
+    ? `Chaves de ${info.rotulo} costumam começar com ${prefixos.map((p) => `"${p}"`).join(' ou ')}. Salvei mesmo assim: use "Testar" para conferir.`
     : '';
   return { ok: true, chave: c, aviso };
 }

@@ -194,6 +194,8 @@ test('R20 validarChave: recusa vazia, com espaço e curta; prefixo diferente é 
   assert.deepEqual([boa.ok, boa.chave, boa.aviso], [true, 'sk-ant-api03-ABCDEFGHIJKLMNOPQRSTUV', '']);
   const estranha = n.validarChave('groq', 'sk-1234567890abcdefghijklmn');
   assert.ok(estranha.ok && estranha.aviso.includes('gsk_'));
+  assert.equal(n.validarChave('gemini', 'AQ.Ab8RN6FALSAFALSAFALSAFALSA').aviso, ''); // formato novo do Google
+  assert.equal(n.validarChave('gemini', 'AIzaFALSAFALSAFALSAFALSAFALSA').aviso, '');
 });
 
 test('R20 mascararChave mostra só o começo e os 4 últimos', () => {
