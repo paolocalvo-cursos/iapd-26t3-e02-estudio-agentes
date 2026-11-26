@@ -16,6 +16,9 @@ let conversas = salvo('conversas', []);
 let atual = conversas[0] ?? n.novaConversa();
 let pasta = salvo('pasta', null); // null = pasta padrão (~/estudio-projetos)
 let roteiro = salvo('roteiro', false);
+let arquitetura = salvo('arquitetura', 'supervisor'); // R39
+let ligacoes = salvo('ligacoes', { scout: ['pixel', 'chevron'], pixel: ['revisor'], chevron: ['revisor'], revisor: ['pixel', 'chevron'] });
+let etapasConstrutor = salvo('construtor', [['scout'], ['pixel', 'chevron'], ['revisor']]);
 let pendente = salvo('pendente', null); // R35: { id, conversa } da rodada que espera Manter/Descartar
 let pastaPadrao = '';
 
@@ -35,6 +38,9 @@ function persistir() {
   localStorage.setItem('pasta', JSON.stringify(pasta));
   localStorage.setItem('roteiro', JSON.stringify(roteiro));
   localStorage.setItem('pendente', JSON.stringify(pendente));
+  localStorage.setItem('arquitetura', JSON.stringify(arquitetura));
+  localStorage.setItem('ligacoes', JSON.stringify(ligacoes));
+  localStorage.setItem('construtor', JSON.stringify(etapasConstrutor));
 }
 
 // ---------- mascotes (SVG) ----------
@@ -114,6 +120,7 @@ function desenharPalco() {
   $('modo').classList.toggle('roteiro', roteiro);
   $('btn-roteiro').classList.toggle('ativo', roteiro);
   $('modo').classList.toggle('gratis', Boolean(ponte && provedores.gratuito && !faltando.length));
+  $('nome-arquitetura').textContent = n.ARQUITETURAS[arquitetura]?.nome ?? arquitetura;
   $('nome-projeto').textContent = roteiro ? 'roteiro falso' : pasta ? pasta.split(/[\\/]/).pop() : 'estudio-projetos (padrão)';
   $('btn-projeto').title = `${pasta || pastaPadrao}\nClique para escolher outra pasta`;
 }
@@ -176,6 +183,11 @@ function desenharMensagens() {
         <p><b>${ROTULO_PORTAO[m.situacao] ?? esc(m.situacao)}</b>${cmd}${origem}${tempo}</p>${caixa}${motivo}${det}</div>`;
     }
     if (m.tipo === 'decisao') return desenharDecisao(m);
+    if (m.tipo === 'sugestao') {
+      const S = n.ARQUITETURAS[m.sugestao]; const A = n.ARQUITETURAS[m.atual];
+      return `<div class="rodada sugestao"><h3>Qual usar, e quando</h3><p>O tipo da tarefa sugere <b>${esc(S.nome)}</b>: ${esc(m.motivo.toLowerCase())}. Este pedido roda em <b>${esc(A?.nome ?? m.atual)}</b>, como está escolhido.</p>
+        ${arquitetura === m.sugestao ? '' : `<button type="button" data-arquitetura="${esc(m.sugestao)}">Usar ${esc(S.nome)} nos próximos pedidos</button>`}</div>`;
+    }
     if (m.tipo === 'arquivos') {
       return `<div class="rodada arquivos"><h3>Arquivos criados ou alterados</h3>${m.arquivos.length
         ? m.arquivos.map((f) => `<button data-abrir="${esc(f)}">📄 ${esc(f)}</button>`).join('')
@@ -308,10 +320,10 @@ function postar(msg) {
 }
 
 // ---------- execução ----------
-async function executar(agente, pedido, anteriores) {
+async function executar(agente, pedido, anteriores, opcoes = {}) {
   mudarEstado(agente.id, 'trabalhando');
   const modo = provedores.modos[agente.provedor] ?? 'cli';
-  const prompt = n.montarPrompt(agente, pedido, anteriores, { modo });
+  const prompt = n.montarPrompt(agente, pedido, anteriores, { modo, proximo: opcoes.proximo });
   const r = await ponte.executarAgente({ agente: agente.id, provedor: agente.provedor, modelo: agente.modelo, prompt, pasta, escrita: n.podeEscrever(agente) });
   const erro = !r.ok || !r.saida;
   const texto = erro
@@ -334,18 +346,26 @@ const ROTULO_PORTAO = {
 // Roda `ids` e, enquanto o portão reprovar, devolve o trabalho para quem fez.
 // `ciclo` vale a rodada inteira: autoria dos arquivos, quem executa e o início (para "o que mudou").
 // `extra` é o recado que só esta chamada recebe (ex.: a devolução do Revisor).
-async function executarComPortao(ids, pedido, anteriores, ciclo, extra = null) {
+// Um portão por vez: na hierárquica, as frentes trabalham em paralelo, mas os testes não rodam juntos na pasta.
+let filaPortao = Promise.resolve();
+function portaoEmFila(dados) {
+  const vez = filaPortao.then(() => ponte.portao(dados));
+  filaPortao = vez.catch(() => {});
+  return vez;
+}
+
+async function executarComPortao(ids, pedido, anteriores, ciclo, extra = null, opcoes = {}) {
   const anotar = (rs) => rs.forEach((r) => r.gravados.forEach((c) => { ciclo.autoria[c] = r.id; }));
   const executores = ids.filter((id) => n.podeEscrever(agentes.find((a) => a.id === id)));
   ciclo.executores = [...new Set([...ciclo.executores, ...executores])];
-  let resultados = await Promise.all(ids.map((id) => executar(agentes.find((a) => a.id === id), pedido, extra ? [...anteriores, extra] : anteriores)));
+  let resultados = await Promise.all(ids.map((id) => executar(agentes.find((a) => a.id === id), pedido, extra ? [...anteriores, extra] : anteriores, opcoes)));
   anteriores.push(...resultados); anotar(resultados);
   if (!executores.length) return null;
   for (let rodada = 1; ; rodada++) {
     marcarPasso('testes');
     const alterados = await ponte.arquivosAlterados({ pasta, desde: ciclo.inicio });
     const el = $('trabalhando'); el.hidden = false; el.textContent = 'Portão de testes rodando…';
-    const p = await ponte.portao({ pasta, houveMudanca: alterados.length > 0 });
+    const p = await portaoEmFila({ pasta, houveMudanca: alterados.length > 0 });
     el.hidden = true;
     const decisao = n.decidirPortao(p.situacao, rodada);
     ciclo.portoes = (ciclo.portoes ?? 0) + 1; // numeração da rodada inteira (o limite de devoluções é por chamada)
@@ -363,7 +383,7 @@ async function executarComPortao(ids, pedido, anteriores, ciclo, extra = null) {
       return p;
     }
     const falha = n.falhaDoPortao(p, rodada);
-    const corretores = n.quemCorrige(p.resumo, ciclo.autoria, ciclo.executores);
+    const corretores = n.quemCorrige(p.resumo, ciclo.autoria, executores); // só quem trabalhou nesta chamada (frente)
     avisarDevolucao(corretores, ROTULO_PORTAO[p.situacao]);
     marcarPasso('execucao');
     resultados = await Promise.all(corretores.map((id) => executar(agentes.find((a) => a.id === id), pedido, [...anteriores, falha])));
@@ -409,6 +429,60 @@ async function revisarComDevolucao(ids, pedido, anteriores, ciclo) {
   }
 }
 
+// R41–R42: rede. Sem líder: quem termina escolhe o vizinho que continua ("PRÓXIMO: nome").
+// Quem escreve passa pelo portão; até MAX_PASSOS_REDE passos e MAX_VISITAS_REDE vezes por agente.
+async function rodarRede(plano, pedido, anteriores, ciclo, propostas) {
+  const visitas = {};
+  let id = plano.rede.inicio;
+  for (let passo = 1; id; passo++) {
+    if (passo > n.MAX_PASSOS_REDE) { postar({ autor: 'sistema', texto: `A rede parou no limite de ${n.MAX_PASSOS_REDE} passos (cuidado com as voltas sem fim).`, erro: true }); return; }
+    const ag = agentes.find((a) => a.id === id);
+    visitas[id] = (visitas[id] ?? 0) + 1;
+    const vizinhos = (plano.rede.vizinhos[id] ?? []).filter((v) => agentes.some((a) => a.id === v));
+    const opcoes = { proximo: vizinhos.map((v) => agentes.find((a) => a.id === v).nome) };
+    let texto;
+    if (n.podeEscrever(ag)) {
+      marcarPasso('execucao');
+      const antes = anteriores.length;
+      await executarComPortao([id], pedido, anteriores, ciclo, null, opcoes);
+      const meus = anteriores.slice(antes).filter((r) => r.id === id); // a 1ª resposta traz o PRÓXIMO; as correções do portão, não
+      texto = meus.find((r) => /pr[oó]ximo\s*:/i.test(r.texto))?.texto ?? meus[0]?.texto ?? '';
+    } else {
+      marcarPasso(n.ehRevisor(ag) ? 'testes' : 'execucao');
+      const r = await executar(ag, pedido, anteriores, opcoes);
+      anteriores.push(r); texto = r.texto;
+      if (n.ehRevisor(ag)) anotarUltima(id, { veredito: n.lerVeredito(texto).veredito });
+    }
+    const prox = n.escolherProximo({ texto, vizinhos, visitas, propostas, agentes });
+    postar({ autor: 'sistema', texto: prox ? `${ag.nome} passou para ${agentes.find((a) => a.id === prox).nome}.` : `${ag.nome} encerrou a rede.` });
+    id = prox;
+  }
+}
+
+// Roda as etapas do plano em sequência. Etapa com quem escreve passa pelo portão; a do Revisor, pela revisão;
+// { frentes } (hierárquica) roda cada frente em paralelo, cada uma com o próprio portão.
+async function rodarEtapas(etapas, pedido, anteriores, ciclo) {
+  for (const etapa of etapas) {
+    if (etapa.frentes) {
+      marcarPasso('execucao');
+      const daFrente = await Promise.all(etapa.frentes.map(async (f) => {
+        const local = [...anteriores]; // cada frente só vê o que veio antes dela (o recado de uma não chega à outra)
+        await executarComPortao(f, pedido, local, ciclo);
+        return local.slice(anteriores.length);
+      }));
+      anteriores.push(...daFrente.flat());
+      continue;
+    }
+    const executa = etapa.some((id) => n.podeEscrever(agentes.find((a) => a.id === id)));
+    const revisa = etapa.every((id) => n.ehRevisor(agentes.find((a) => a.id === id)));
+    marcarPasso(revisa ? 'testes' : 'execucao'); // o revisor confere: é verificação, não execução
+    if (executa) { await executarComPortao(etapa, pedido, anteriores, ciclo); continue; }
+    if (revisa) { await revisarComDevolucao(etapa, pedido, anteriores, ciclo); continue; }
+    const resultados = await Promise.all(etapa.map((id) => executar(agentes.find((a) => a.id === id), pedido, anteriores)));
+    anteriores.push(...resultados);
+  }
+}
+
 async function enviar(pedido) {
   ocupado = true;
   if (roteiro) ponte = criarPonteFalsa({ agentes }); // cada pedido recomeça o roteiro do zero
@@ -440,19 +514,18 @@ async function enviar(pedido) {
       agentes.forEach((a) => { estados[a.id] = 'disponivel'; });
       postar({ autor: 'sistema', tipo: 'rodada', propostas });
       await esperar(900);
-      const { etapas, mensagem } = n.montarTime(agentes, propostas);
-      if (maestro) { postar({ autor: maestro.id, texto: mensagem, time: etapas.flat() }); falar(maestro.id, mensagem); }
+      const plano = n.montarPlano(arquitetura, agentes, propostas, { ligacoes, etapasConstrutor });
+      if (plano.erro) throw new Error(plano.erro);
+      const sug = n.sugerirArquitetura(pedido, agentes);
+      if (sug.id !== arquitetura && arquitetura !== 'construtor') postar({ autor: 'sistema', tipo: 'sugestao', sugestao: sug.id, motivo: sug.motivo, atual: arquitetura });
+      const time = plano.etapas ? plano.etapas.flatMap((e) => (e.frentes ? e.frentes.flat() : e)) : [plano.rede.inicio];
+      const lider = plano.lider && agentes.find((a) => a.id === plano.lider);
+      if (lider) { postar({ autor: lider.id, texto: plano.mensagem, time }); falar(lider.id, plano.mensagem); }
+      else postar({ autor: 'sistema', texto: `🏗 ${plano.mensagem}`, time });
       const anteriores = [];
       const ciclo = { inicio, autoria: {}, executores: [] };
-      for (const etapa of etapas) {
-        const executa = etapa.some((id) => n.podeEscrever(agentes.find((a) => a.id === id)));
-        const revisa = etapa.every((id) => n.ehRevisor(agentes.find((a) => a.id === id)));
-        marcarPasso(revisa ? 'testes' : 'execucao'); // o revisor confere: é verificação, não execução
-        if (executa) { await executarComPortao(etapa, pedido, anteriores, ciclo); continue; }
-        if (revisa) { await revisarComDevolucao(etapa, pedido, anteriores, ciclo); continue; }
-        const resultados = await Promise.all(etapa.map((id) => executar(agentes.find((a) => a.id === id), pedido, anteriores)));
-        anteriores.push(...resultados);
-      }
+      if (plano.rede) await rodarRede(plano, pedido, anteriores, ciclo, propostas);
+      else await rodarEtapas(plano.etapas, pedido, anteriores, ciclo);
     }
     await fecharRodada(foto, inicio);
   } catch (e) {
@@ -502,6 +575,8 @@ $('palco').addEventListener('contextmenu', (ev) => {
 });
 
 $('mensagens').addEventListener('click', async (ev) => {
+  const arq = ev.target.closest('[data-arquitetura]');
+  if (arq && !ocupado) { arquitetura = arq.dataset.arquitetura; persistir(); desenhar(); return; }
   const dec = ev.target.closest('[data-decidir]');
   if (dec) {
     ev.preventDefault();
@@ -662,6 +737,81 @@ $('lista-chaves').addEventListener('click', async (ev) => {
   } finally {
     if (b.isConnected) b.disabled = false;
   }
+});
+
+// ---------- R39–R41: escolher a arquitetura, ligar a rede, montar no construtor ----------
+let rascunho = null; // { arquitetura, ligacoes, etapas } enquanto o diálogo está aberto
+const clonar = (x) => JSON.parse(JSON.stringify(x));
+const semCoordenador = () => agentes.filter((a) => !a.coordenador);
+
+function desenharDialogoTime() {
+  $('lista-arquiteturas').innerHTML = Object.entries(n.ARQUITETURAS).map(([id, a]) => `
+    <label class="arq ${rascunho.arquitetura === id ? 'escolhida' : ''}">
+      <input type="radio" name="arq" value="${id}" ${rascunho.arquitetura === id ? 'checked' : ''}>
+      <b>${esc(a.nome)}</b>${a.variacao ? ' <small class="tag">variação</small>' : ''}${a.lider ? ' <small class="tag">com líder</small>' : ''}
+      <span>${esc(a.resumo)}</span>
+      <small>Quando: ${esc(a.quando)} · Cuidado: ${esc(a.cuidado)}</small>
+    </label>`).join('');
+  $('painel-ligacoes').hidden = rascunho.arquitetura !== 'rede-escolhida';
+  $('painel-construtor').hidden = rascunho.arquitetura !== 'construtor';
+  const time = semCoordenador();
+  $('grade-ligacoes').innerHTML = `<table class="grade"><tr><th>de ↓ para →</th>${time.map((a) => `<th>${esc(a.nome)}</th>`).join('')}</tr>
+    ${time.map((de) => `<tr><th>${esc(de.nome)}</th>${time.map((para) => (de.id === para.id ? '<td>—</td>'
+      : `<td><input type="checkbox" data-de="${de.id}" data-para="${para.id}" ${(rascunho.ligacoes[de.id] ?? []).includes(para.id) ? 'checked' : ''}></td>`)).join('')}</tr>`).join('')}</table>`;
+  const usados = new Set(rascunho.etapas.flat());
+  const chip = (a) => `<span class="chip-agente" draggable="true" data-arrastar="${a.id}" style="--cor:${a.cor}">${esc(a.nome)}</span>`;
+  const colunas = [...rascunho.etapas, []].slice(0, 5); // sempre sobra uma etapa vazia (até 5)
+  $('construtor').innerHTML = `<div class="coluna fora" data-coluna="-1"><h4>Fora</h4>${time.filter((a) => !usados.has(a.id)).map(chip).join('')}</div>`
+    + colunas.map((ids, i) => `<div class="coluna" data-coluna="${i}"><h4>Etapa ${i + 1}</h4>${ids.map((id) => time.find((a) => a.id === id)).filter(Boolean).map(chip).join('')}</div>`).join('');
+}
+
+$('btn-time').addEventListener('click', () => {
+  if (ocupado) return;
+  rascunho = { arquitetura, ligacoes: clonar(ligacoes), etapas: clonar(etapasConstrutor) };
+  desenharDialogoTime();
+  $('dlg-time').showModal();
+});
+$('lista-arquiteturas').addEventListener('change', (ev) => {
+  if (ev.target.name === 'arq') { rascunho.arquitetura = ev.target.value; desenharDialogoTime(); }
+});
+$('grade-ligacoes').addEventListener('change', (ev) => {
+  const { de, para } = ev.target.dataset;
+  if (!de) return;
+  const lista = new Set(rascunho.ligacoes[de] ?? []);
+  if (ev.target.checked) lista.add(para); else lista.delete(para);
+  rascunho.ligacoes[de] = [...lista];
+});
+$('construtor').addEventListener('dragstart', (ev) => {
+  const id = ev.target.dataset?.arrastar;
+  if (id) ev.dataTransfer.setData('text/plain', id);
+});
+$('construtor').addEventListener('dragover', (ev) => { if (ev.target.closest('.coluna')) ev.preventDefault(); });
+$('construtor').addEventListener('drop', (ev) => {
+  const coluna = ev.target.closest('.coluna');
+  const id = ev.dataTransfer.getData('text/plain');
+  if (!coluna || !id) return;
+  ev.preventDefault();
+  moverNoConstrutor(id, Number(coluna.dataset.coluna));
+});
+// Sem arrastar (teclado, toque): clicar no agente o leva para a próxima coluna.
+$('construtor').addEventListener('click', (ev) => {
+  const id = ev.target.dataset?.arrastar;
+  if (!id) return;
+  const i = rascunho.etapas.findIndex((e) => e.includes(id));
+  moverNoConstrutor(id, i + 1 > Math.min(rascunho.etapas.length, 4) ? -1 : i + 1);
+});
+function moverNoConstrutor(id, destinoColuna) {
+  const etapas = rascunho.etapas.map((e) => e.filter((x) => x !== id));
+  if (destinoColuna >= 0) { while (etapas.length <= destinoColuna) etapas.push([]); etapas[destinoColuna].push(id); }
+  rascunho.etapas = etapas.filter((e, i) => e.length || i < destinoColuna);
+  desenharDialogoTime();
+}
+$('form-time').addEventListener('submit', (ev) => {
+  if (ev.submitter?.value !== 'salvar') return;
+  arquitetura = rascunho.arquitetura;
+  ligacoes = rascunho.ligacoes;
+  etapasConstrutor = rascunho.etapas.filter((e) => e.length);
+  persistir(); desenhar();
 });
 
 // ---------- cartão do agente: provedor e modelo (R23) ----------

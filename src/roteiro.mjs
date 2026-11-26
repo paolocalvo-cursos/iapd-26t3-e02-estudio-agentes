@@ -81,6 +81,14 @@ const FALAS = {
   }),
 };
 
+// Na rede, quem cada um escolhe para continuar (só vale se a pessoa estiver entre os vizinhos).
+const CORRENTE = {
+  scout: () => 'Chevron',
+  chevron: (vez) => (vez === 1 ? 'Pixel' : 'Revisor'),
+  pixel: () => 'Revisor',
+  revisor: (vez) => (vez === 1 ? 'Pixel' : 'ninguém'),
+};
+
 function falaGenerica(agente, escrita, vez) {
   if (!escrita) return { texto: `${agente.papel}: li o que o time entregou e não tenho nada a acrescentar.` };
   const caminho = `notas/${agente.id}.md`;
@@ -107,11 +115,16 @@ export function criarPonteFalsa({ agentes = [], ritmo = 1 } = {}) {
     pastaPadrao: async () => '(roteiro falso: nada é gravado no disco)',
     escolherPasta: async () => null,
 
-    async executarAgente({ agente: id, escrita = false } = {}) {
+    async executarAgente({ agente: id, escrita = false, prompt = '' } = {}) {
       const agente = agentes.find((a) => a.id === id) ?? { id: id ?? 'agente', nome: id ?? 'Agente', papel: 'agente', provedor: 'claude' };
       const vez = (vezes[agente.id] = (vezes[agente.id] ?? 0) + 1);
       await esperar(1400 + 500 * (agentes.indexOf(agente) % 3));
-      const fala = FALAS[agente.id]?.(vez) ?? falaGenerica(agente, escrita, vez);
+      const fala = { ...(FALAS[agente.id]?.(vez) ?? falaGenerica(agente, escrita, vez)) };
+      const opcoes = /opções: ([^)]*)\)/.exec(prompt ?? '')?.[1]?.split(', ') ?? null; // a rede pediu "PRÓXIMO:"
+      if (opcoes) {
+        const quer = CORRENTE[agente.id]?.(vez);
+        if (quer === 'ninguém' || opcoes.includes(quer)) fala.texto += `\n\nPRÓXIMO: ${quer}`;
+      }
       const caminhos = escrita ? Object.keys(fala.arquivos ?? {}) : [];
       caminhos.forEach((c) => { gravados.set(c, agente.id); conteudos.set(c, fala.arquivos[c]); });
       return { ok: true, saida: fala.texto, modo: 'roteiro', modelo: CATALOGO[agente.provedor]?.modelo, gravados: caminhos };
