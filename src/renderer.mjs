@@ -19,7 +19,9 @@ let roteiro = salvo('roteiro', false);
 let arquitetura = salvo('arquitetura', 'supervisor'); // R39
 let ligacoes = salvo('ligacoes', { scout: ['pixel', 'chevron'], pixel: ['revisor'], chevron: ['revisor'], revisor: ['pixel', 'chevron'] });
 let etapasConstrutor = salvo('construtor', [['scout'], ['pixel', 'chevron'], ['revisor']]);
-let pendente = salvo('pendente', null); // R35: { id, conversa } da rodada que espera Manter/Descartar
+let pendente = salvo('pendente', null);
+let casoAtual = salvo('caso', null); // R51: caso da Aula 17 carregado (o Enter vazio usa o pedido dele)
+const pedidoVazio = () => n.CASOS_AULA17[casoAtual]?.pedido ?? PEDIDO_DO_ROTEIRO; // R35: { id, conversa } da rodada que espera Manter/Descartar
 let pastaPadrao = '';
 
 // ---------- estado da tela ----------
@@ -41,6 +43,7 @@ function persistir() {
   localStorage.setItem('roteiro', JSON.stringify(roteiro));
   localStorage.setItem('pendente', JSON.stringify(pendente));
   localStorage.setItem('arquitetura', JSON.stringify(arquitetura));
+  localStorage.setItem('caso', JSON.stringify(casoAtual));
   localStorage.setItem('ligacoes', JSON.stringify(ligacoes));
   localStorage.setItem('construtor', JSON.stringify(etapasConstrutor));
 }
@@ -142,7 +145,7 @@ function desenharChips() {
     agentes.map((a) => chip(a.id, a.nome, a.cor, estados[a.id] === 'trabalhando' ? ' •' : '')).join('');
   const alvo = agentes.find((a) => a.id === destino);
   $('destino-dica').textContent = alvo ? `Só ${alvo.nome} responde` : 'O time decide quem responde';
-  $('entrada').placeholder = alvo ? `Fale com ${alvo.nome}...` : roteiro ? `Enter vazio usa: ${PEDIDO_DO_ROTEIRO}` : 'Fale com o time...';
+  $('entrada').placeholder = alvo ? `Fale com ${alvo.nome}...` : roteiro ? `Enter vazio usa: ${pedidoVazio()}` : 'Fale com o time...';
 }
 
 function formatar(texto) {
@@ -598,7 +601,7 @@ async function enviar(pedido) {
 // ---------- eventos ----------
 $('compositor').addEventListener('submit', (ev) => {
   ev.preventDefault();
-  const texto = $('entrada').value.trim() || (roteiro && destino === 'time' ? PEDIDO_DO_ROTEIRO : '');
+  const texto = $('entrada').value.trim() || (roteiro && destino === 'time' ? pedidoVazio() : '');
   if (!texto || ocupado) return;
   $('entrada').value = '';
   $('entrada').style.height = '';
@@ -825,11 +828,11 @@ function desenharDialogoTime() {
 function carregarCaso(id) {
   if (id === 'padrao') {
     agentes = n.TIME_PADRAO.map((a) => ({ ...a }));
-    arquitetura = 'supervisor';
+    arquitetura = 'supervisor'; casoAtual = null;
     postar({ autor: 'sistema', texto: '🏗 Voltou o time padrão (Supervisor).' });
   } else {
     const c = n.montarCaso(id);
-    agentes = c.agentes; arquitetura = c.arquitetura;
+    agentes = c.agentes; arquitetura = c.arquitetura; casoAtual = id;
     if (Object.keys(c.ligacoes).length) ligacoes = c.ligacoes;
     postar({ autor: 'sistema', tipo: 'caso', caso: id });
     $('entrada').value = c.pedido;
