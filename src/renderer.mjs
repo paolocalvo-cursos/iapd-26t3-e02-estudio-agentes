@@ -19,7 +19,9 @@ let roteiro = salvo('roteiro', false);
 let arquitetura = salvo('arquitetura', 'supervisor'); // R39
 let ligacoes = salvo('ligacoes', { scout: ['pixel', 'chevron'], pixel: ['revisor'], chevron: ['revisor'], revisor: ['pixel', 'chevron'] });
 let etapasConstrutor = salvo('construtor', [['scout'], ['pixel', 'chevron'], ['revisor']]);
-let pendente = salvo('pendente', null); // R35: { id, conversa } da rodada que espera Manter/Descartar
+let pendente = salvo('pendente', null);
+let casoAtual = salvo('caso', null); // R51: caso da Aula 17 carregado (o Enter vazio usa o pedido dele)
+const pedidoVazio = () => n.CASOS_AULA17[casoAtual]?.pedido ?? PEDIDO_DO_ROTEIRO; // R35: { id, conversa } da rodada que espera Manter/Descartar
 let pastaPadrao = '';
 
 // ---------- estado da tela ----------
@@ -29,6 +31,8 @@ let ocupado = false;
 let provedores = { modos: {}, chaves: [] };
 const baloes = new Map();
 const saidas = new Map(); // comando executado -> saída
+let camadas = { regras: '', memoria: '', skills: {} }; // R48–R50, lidas da pasta no começo de cada pedido
+let registroRodada = null; // fatos da rodada para a memória (R50): pedido, arquitetura, time, portão, veredito
 let confirmando = null; // id da foto cujo Descartar espera o segundo clique
 
 function persistir() {
@@ -39,6 +43,7 @@ function persistir() {
   localStorage.setItem('roteiro', JSON.stringify(roteiro));
   localStorage.setItem('pendente', JSON.stringify(pendente));
   localStorage.setItem('arquitetura', JSON.stringify(arquitetura));
+  localStorage.setItem('caso', JSON.stringify(casoAtual));
   localStorage.setItem('ligacoes', JSON.stringify(ligacoes));
   localStorage.setItem('construtor', JSON.stringify(etapasConstrutor));
 }
@@ -86,6 +91,13 @@ function mascote(a) {
     <rect x="57" y="88" width="9" height="14" rx="2" fill="${s}"/><rect x="72" y="88" width="9" height="14" rx="2" fill="${s}"/></svg>`;
 }
 
+// R44: ícones e texto das ferramentas de cada agente.
+function textoFerramentas(a) {
+  const tem = n.ferramentasDo(a);
+  if (!tem.length) return a.coordenador ? 'Sem ferramentas: o líder só planeja e distribui' : 'Sem ferramentas: só conversa';
+  return `Ferramentas: ${tem.map((f) => n.FERRAMENTAS[f].rotulo).join(', ')}`;
+}
+
 const ROTULO_VEREDITO = { aprovado: '✓ aprovou', devolver: '↩ devolveu', 'sem-veredito': 'sem veredito' };
 const ROTULO_ESTADO = { disponivel: 'Disponível', pensando: 'Pensando', trabalhando: 'Trabalhando', concluido: 'Concluído' };
 
@@ -96,6 +108,7 @@ function desenharPalco() {
       ${baloes.has(a.id) ? `<div class="balao">${esc(baloes.get(a.id))}</div>` : ''}
       ${mascote(a)}
       <span class="nome">${esc(a.nome)}</span><span class="papel">${esc(a.papel)}</span>
+      <span class="ferramentas" title="${esc(textoFerramentas(a))}">${n.ferramentasDo(a).map((f) => n.FERRAMENTAS[f].icone).join(' ') || '—'}</span>
       <span class="estado">${ROTULO_ESTADO[estados[a.id] ?? 'disponivel']}</span>
     </button>`).join('');
   $('status').textContent = n.resumoStatus(agentes, estados);
@@ -132,7 +145,7 @@ function desenharChips() {
     agentes.map((a) => chip(a.id, a.nome, a.cor, estados[a.id] === 'trabalhando' ? ' •' : '')).join('');
   const alvo = agentes.find((a) => a.id === destino);
   $('destino-dica').textContent = alvo ? `Só ${alvo.nome} responde` : 'O time decide quem responde';
-  $('entrada').placeholder = alvo ? `Fale com ${alvo.nome}...` : roteiro ? `Enter vazio usa: ${PEDIDO_DO_ROTEIRO}` : 'Fale com o time...';
+  $('entrada').placeholder = alvo ? `Fale com ${alvo.nome}...` : roteiro ? `Enter vazio usa: ${pedidoVazio()}` : 'Fale com o time...';
 }
 
 function formatar(texto) {
@@ -144,9 +157,14 @@ function formatar(texto) {
     .replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>');
 }
 
-function desenharComandos(texto) {
+function desenharComandos(texto, autor) {
   const cmds = n.extrairComandos(texto);
   if (!cmds.length) return '';
+  const quem = agentes.find((a) => a.id === autor);
+  if (quem && !n.ferramentasDo(quem).includes('executar')) {
+    // R44: sem a ferramenta Executar, o comando sugerido aparece, mas não roda pela tela
+    return `<div class="comandos">${cmds.map(({ comando }) => `<div class="comando bloqueado"><code title="${esc(comando)}">$ ${esc(comando)}</code><span class="aviso-sensivel">${esc(quem.nome)} não tem ▶ Executar</span></div>`).join('')}</div>`;
+  }
   return `<div class="comandos">${cmds.map(({ comando, sensivel }) => {
     const s = saidas.get(comando);
     return `<div class="comando ${sensivel ? 'sensivel' : ''}"><code title="${esc(comando)}">$ ${esc(comando)}</code>
@@ -183,6 +201,17 @@ function desenharMensagens() {
         <p><b>${ROTULO_PORTAO[m.situacao] ?? esc(m.situacao)}</b>${cmd}${origem}${tempo}</p>${caixa}${motivo}${det}</div>`;
     }
     if (m.tipo === 'decisao') return desenharDecisao(m);
+    if (m.tipo === 'caso') {
+      const c = n.CASOS_AULA17[m.caso];
+      if (!c) return '';
+      const time = c.agentes().filter((a) => !a.coordenador || n.ARQUITETURAS[c.arquitetura].lider)
+        .map((a) => `<li><b>${esc(a.nome)}</b> · ${esc(a.papel)} · ${n.ferramentasDo(a).map((f) => n.FERRAMENTAS[f].icone).join(' ') || 'sem ferramentas'}${n.ehRevisor(a) ? ' · <i>juiz</i>' : ''}</li>`).join('');
+      return `<div class="rodada caso"><h3>${esc(c.titulo)}</h3>
+        <p><b>Arquitetura:</b> ${esc(n.ARQUITETURAS[c.arquitetura].nome)}. ${esc(c.porque)}</p>
+        <p><b>Time montado:</b></p><ul>${time}</ul>
+        <p><b>Onde fica o juiz:</b> ${esc(c.juiz)}</p>
+        <p class="nota">O pedido do caso já está na caixa de texto. Com o 🎬 ligado, roda sem custo.</p></div>`;
+    }
     if (m.tipo === 'sugestao') {
       const S = n.ARQUITETURAS[m.sugestao]; const A = n.ARQUITETURAS[m.atual];
       return `<div class="rodada sugestao"><h3>Qual usar, e quando</h3><p>O tipo da tarefa sugere <b>${esc(S.nome)}</b>: ${esc(m.motivo.toLowerCase())}. Este pedido roda em <b>${esc(A?.nome ?? m.atual)}</b>, como está escolhido.</p>
@@ -198,7 +227,7 @@ function desenharMensagens() {
       <div class="cab">${esc(a.nome)}<small>${hora(m.em)}</small>${m.erro ? '<span class="selo">falhou</span>' : ''}${m.veredito ? `<span class="selo veredito-${m.veredito}">${ROTULO_VEREDITO[m.veredito]}</span>` : ''}${m.gratis && !m.erro ? `<span class="selo gratis" title="${esc(m.modelo ?? '')}">Gemini grátis</span>` : ''}</div>
       <div class="corpo">${formatar(m.texto)}</div>
       ${m.time ? `<div class="etiquetas">${m.time.map((id) => `<span style="--cor:${ag(id).cor}">${esc(ag(id).nome)}</span>`).join('')}</div>` : ''}
-      ${desenharComandos(m.texto)}</div></div>`;
+      ${desenharComandos(m.texto, m.autor)}</div></div>`;
   }).join('');
   const caixa = $('mensagens');
   caixa.innerHTML = html || '<p class="vazio">Peça algo ao time.<br>Ex.: “Crie uma página de status com um endpoint /health”.</p>';
@@ -246,6 +275,13 @@ function marcarDecisao(id, mudanca) {
   conversas = conversas.map(mexer);
 }
 
+// R50: a memória longa recebe uma entrada por rodada, escrita pelo sistema (só fatos).
+async function anotarNaMemoria(registro, decisao) {
+  if (!registro || !ponte) return;
+  const r = await ponte.anotarMemoria({ pasta, entrada: n.entradaDeMemoria({ ...registro, decisao, em: Date.now() }) });
+  if (!r.ok) postar({ autor: 'sistema', texto: `Não anotei na memória: ${r.erro}`, erro: true });
+}
+
 // Manter apaga a foto; Descartar devolve a pasta ao que era antes do pedido.
 async function decidir(acao, { automatico = false } = {}) {
   const p = pendente;
@@ -254,9 +290,11 @@ async function decidir(acao, { automatico = false } = {}) {
     const r = await ponte.descartarFoto({ id: p.id, pasta });
     if (r.erro) { postar({ autor: 'sistema', texto: `Não deu para descartar: ${r.erro}`, erro: true }); return; }
     marcarDecisao(p.id, { estado: 'descartado', resultado: r });
+    await anotarNaMemoria(p.registro, 'descartado');
   } else {
     await ponte.manterFoto({ id: p.id });
     marcarDecisao(p.id, { estado: 'mantido', automatico });
+    await anotarNaMemoria(p.registro, automatico ? 'mantido sem decisão' : 'mantido');
   }
   pendente = null; confirmando = null;
   persistir(); desenharMensagens();
@@ -268,15 +306,18 @@ async function fecharRodada(foto, inicio) {
   const d = foto ? await ponte.diffFoto({ id: foto, pasta }) : null;
   if (!d || d.erro) {
     if (d?.erro) postar({ autor: 'sistema', texto: `Sem diff desta rodada: ${d.erro}`, erro: true });
-    postar({ autor: 'sistema', tipo: 'arquivos', arquivos: await ponte.arquivosAlterados({ pasta, desde: inicio }) });
+    const arquivos = await ponte.arquivosAlterados({ pasta, desde: inicio });
+    postar({ autor: 'sistema', tipo: 'arquivos', arquivos });
+    await anotarNaMemoria({ ...registroRodada, arquivos }, 'sem foto: mantido');
     return;
   }
   if (!n.totalDeMudancas(d)) {
     await ponte.manterFoto({ id: foto });
     postar({ autor: 'sistema', tipo: 'decisao', estado: 'nada' });
+    await anotarNaMemoria({ ...registroRodada, arquivos: [] }, 'nada mudou');
     return;
   }
-  pendente = { id: foto, conversa: atual.id };
+  pendente = { id: foto, conversa: atual.id, registro: { ...registroRodada, arquivos: d.diffs.map((x) => x.caminho) } };
   postar({ autor: 'sistema', tipo: 'decisao', foto, estado: 'pendente', ...d });
 }
 
@@ -323,8 +364,11 @@ function postar(msg) {
 async function executar(agente, pedido, anteriores, opcoes = {}) {
   mudarEstado(agente.id, 'trabalhando');
   const modo = provedores.modos[agente.provedor] ?? 'cli';
-  const prompt = n.montarPrompt(agente, pedido, anteriores, { modo, proximo: opcoes.proximo });
-  const r = await ponte.executarAgente({ agente: agente.id, provedor: agente.provedor, modelo: agente.modelo, prompt, pasta, escrita: n.podeEscrever(agente) });
+  const prompt = n.montarPrompt(agente, pedido, anteriores, {
+    modo, proximo: opcoes.proximo, regras: camadas.regras, skill: camadas.skills?.[agente.id], memoria: n.recortarMemoria(camadas.memoria),
+  });
+  if (registroRodada && !registroRodada.time.includes(agente.nome)) registroRodada.time.push(agente.nome);
+  const r = await ponte.executarAgente({ agente: agente.id, provedor: agente.provedor, modelo: agente.modelo, prompt, pasta, escrita: n.podeEscrever(agente), ferramentas: n.ferramentasDo(agente) });
   const erro = !r.ok || !r.saida;
   const texto = erro
     ? `${agente.provedor} falhou: ${(r.erro || r.saida || 'sem resposta').trim().split('\n').slice(-3).join('\n')}`
@@ -368,6 +412,7 @@ async function executarComPortao(ids, pedido, anteriores, ciclo, extra = null, o
     const p = await portaoEmFila({ pasta, houveMudanca: alterados.length > 0 });
     el.hidden = true;
     const decisao = n.decidirPortao(p.situacao, rodada);
+    if (registroRodada) registroRodada.portao = p.situacao;
     ciclo.portoes = (ciclo.portoes ?? 0) + 1; // numeração da rodada inteira (o limite de devoluções é por chamada)
     postar({ autor: 'sistema', tipo: 'portao', ...p, rodada: ciclo.portoes, decisao, saida: undefined, detalhe: p.saida });
     if (p.situacao === 'bloqueado') {
@@ -382,6 +427,11 @@ async function executarComPortao(ids, pedido, anteriores, ciclo, extra = null, o
       anteriores.push({ nome: 'Portão de testes', papel: 'testes automáticos', texto: `NÃO APROVADO depois de ${n.MAX_DEVOLUCOES} devoluções.\n${p.resumo || ''}` });
       return p;
     }
+    if (n.falhaEDeOutros(p.resumo, ciclo.autoria, executores)) {
+      // hierárquica: a falha cita só arquivos de outra frente; quem cuida é a frente dona deles
+      postar({ autor: 'sistema', texto: `A falha cita arquivos de outra frente; ${executores.map((id) => agentes.find((a) => a.id === id)?.nome).join(' e ')} segue.` });
+      return p;
+    }
     const falha = n.falhaDoPortao(p, rodada);
     const corretores = n.quemCorrige(p.resumo, ciclo.autoria, executores); // só quem trabalhou nesta chamada (frente)
     avisarDevolucao(corretores, ROTULO_PORTAO[p.situacao]);
@@ -393,8 +443,9 @@ async function executarComPortao(ids, pedido, anteriores, ciclo, extra = null, o
 
 function avisarDevolucao(corretores, motivo) {
   const nomes = corretores.map((id) => agentes.find((a) => a.id === id)?.nome).join(' e ');
-  const maestro = agentes.find((a) => a.coordenador);
-  if (maestro) { postar({ autor: maestro.id, texto: `Voltou para ${nomes}: ${motivo}.` }); falar(maestro.id, `Voltou para ${nomes}.`); }
+  const lider = n.ARQUITETURAS[arquitetura]?.lider && agentes.find((a) => a.coordenador); // sem líder, quem avisa é o Estúdio
+  if (lider) { postar({ autor: lider.id, texto: `Voltou para ${nomes}: ${motivo}.` }); falar(lider.id, `Voltou para ${nomes}.`); }
+  else postar({ autor: 'sistema', texto: `Voltou para ${nomes}: ${motivo}.` });
 }
 
 // Marca o veredito na última mensagem do agente (selo "aprovou" / "devolveu" no chat).
@@ -415,6 +466,7 @@ async function revisarComDevolucao(ids, pedido, anteriores, ciclo) {
     const vereditos = rs.map((r) => ({ id: r.id, texto: r.texto, ...n.lerVeredito(r.texto) }));
     vereditos.forEach((v) => anotarUltima(v.id, { veredito: v.veredito }));
     const devolvidos = vereditos.filter((v) => v.veredito === 'devolver');
+    if (registroRodada) registroRodada.veredito = devolvidos.length ? 'devolveu' : vereditos[0]?.veredito ?? '';
     const decisao = n.decidirRevisao(devolvidos.length ? 'devolver' : 'aprovado', rodada);
     if (decisao === 'seguir' || !ciclo.executores.length) return;
     if (decisao === 'desistir') {
@@ -423,7 +475,7 @@ async function revisarComDevolucao(ids, pedido, anteriores, ciclo) {
     }
     const v = { achados: devolvidos.flatMap((d) => d.achados), texto: devolvidos.map((d) => d.texto).join('\n\n') };
     const corretores = n.quemCorrige(v.achados.join('\n') || v.texto, ciclo.autoria, ciclo.executores);
-    avisarDevolucao(corretores, 'o Revisor devolveu');
+    avisarDevolucao(corretores, `${devolvidos.map((d) => agentes.find((a) => a.id === d.id)?.nome ?? d.id).join(' e ')} devolveu`);
     marcarPasso('execucao');
     await executarComPortao(corretores, pedido, anteriores, ciclo, n.falhaDaRevisao(v, rodada));
   }
@@ -451,7 +503,11 @@ async function rodarRede(plano, pedido, anteriores, ciclo, propostas) {
       marcarPasso(n.ehRevisor(ag) ? 'testes' : 'execucao');
       const r = await executar(ag, pedido, anteriores, opcoes);
       anteriores.push(r); texto = r.texto;
-      if (n.ehRevisor(ag)) anotarUltima(id, { veredito: n.lerVeredito(texto).veredito });
+      if (n.ehRevisor(ag)) {
+        const v = n.lerVeredito(texto).veredito;
+        anotarUltima(id, { veredito: v });
+        if (registroRodada) registroRodada.veredito = v;
+      }
     }
     const prox = n.escolherProximo({ texto, vizinhos, visitas, propostas, agentes });
     postar({ autor: 'sistema', texto: prox ? `${ag.nome} passou para ${agentes.find((a) => a.id === prox).nome}.` : `${ag.nome} encerrou a rede.` });
@@ -495,6 +551,8 @@ async function enviar(pedido) {
     provedores = await ponte.provedores(); // o .env pode ter mudado
     desenharPalco();
     if (pendente) await decidir('manter', { automatico: true }); // a foto nova já inclui o que ficou
+    camadas = await ponte.lerCamadas({ pasta });
+    registroRodada = { pedido, arquitetura: agentes.some((a) => a.id === destino) ? '' : arquitetura, time: [], portao: '', veredito: '' };
     const f = await ponte.tirarFoto({ pasta });
     if (f.erro) postar({ autor: 'sistema', texto: `Sem foto da pasta (${f.erro}): nesta rodada não vai dar para descartar.`, erro: true });
     else foto = f.id;
@@ -543,7 +601,7 @@ async function enviar(pedido) {
 // ---------- eventos ----------
 $('compositor').addEventListener('submit', (ev) => {
   ev.preventDefault();
-  const texto = $('entrada').value.trim() || (roteiro && destino === 'time' ? PEDIDO_DO_ROTEIRO : '');
+  const texto = $('entrada').value.trim() || (roteiro && destino === 'time' ? pedidoVazio() : '');
   if (!texto || ocupado) return;
   $('entrada').value = '';
   $('entrada').style.height = '';
@@ -646,7 +704,8 @@ $('btn-novo-agente').addEventListener('click', () => { $('erro-agente').textCont
 $('form-agente').addEventListener('submit', (ev) => {
   if (ev.submitter?.value !== 'criar') return;
   try {
-    agentes = n.criarAgente(agentes, Object.fromEntries(new FormData(ev.target)));
+    const dados = new FormData(ev.target);
+    agentes = n.criarAgente(agentes, { ...Object.fromEntries(dados), ferramentas: dados.getAll('ferramenta') });
     estados = { ...estados, [agentes.at(-1).id]: 'disponivel' };
     persistir(); desenhar();
   } catch (e) {
@@ -765,11 +824,38 @@ function desenharDialogoTime() {
     + colunas.map((ids, i) => `<div class="coluna" data-coluna="${i}"><h4>Etapa ${i + 1}</h4>${ids.map((id) => time.find((a) => a.id === id)).filter(Boolean).map(chip).join('')}</div>`).join('');
 }
 
+// R51: carregar o time de um caso da Aula 17 (ou voltar ao time padrão).
+function carregarCaso(id) {
+  if (id === 'padrao') {
+    agentes = n.TIME_PADRAO.map((a) => ({ ...a }));
+    arquitetura = 'supervisor'; casoAtual = null;
+    postar({ autor: 'sistema', texto: '🏗 Voltou o time padrão (Supervisor).' });
+  } else {
+    const c = n.montarCaso(id);
+    agentes = c.agentes; arquitetura = c.arquitetura; casoAtual = id;
+    if (Object.keys(c.ligacoes).length) ligacoes = c.ligacoes;
+    postar({ autor: 'sistema', tipo: 'caso', caso: id });
+    $('entrada').value = c.pedido;
+  }
+  estados = Object.fromEntries(agentes.map((a) => [a.id, 'disponivel']));
+  destino = 'time';
+  persistir(); desenhar();
+}
+
 $('btn-time').addEventListener('click', () => {
   if (ocupado) return;
+  $('lista-casos').innerHTML = Object.entries(n.CASOS_AULA17).map(([id, c]) => `<button type="button" data-caso="${id}" title="${esc(c.porque)}">${esc(c.titulo)}<small>${esc(n.ARQUITETURAS[c.arquitetura].nome)}</small></button>`).join('')
+    + '<button type="button" data-caso="padrao">Time padrão<small>Supervisor</small></button>';
   rascunho = { arquitetura, ligacoes: clonar(ligacoes), etapas: clonar(etapasConstrutor) };
   desenharDialogoTime();
   $('dlg-time').showModal();
+});
+$('lista-casos').addEventListener('click', (ev) => {
+  const b = ev.target.closest('[data-caso]');
+  if (!b) return;
+  carregarCaso(b.dataset.caso);
+  $('dlg-time').close();
+  $('entrada').focus();
 });
 $('lista-arquiteturas').addEventListener('change', (ev) => {
   if (ev.target.name === 'arq') { rascunho.arquitetura = ev.target.value; desenharDialogoTime(); }
@@ -814,6 +900,35 @@ $('form-time').addEventListener('submit', (ev) => {
   persistir(); desenhar();
 });
 
+// ---------- R48–R50: diálogo de instruções (regras do projeto, skills) e memória ----------
+let rascunhoCamadas = null;
+
+$('btn-camadas').addEventListener('click', async () => {
+  if (ocupado || !ponte) return;
+  const c = await ponte.lerCamadas({ pasta });
+  rascunhoCamadas = { ...c, skills: { ...c.skills }, mudadas: new Set() };
+  $('camadas-regras').value = c.regras;
+  $('camadas-memoria').value = c.memoria;
+  $('camadas-agente').innerHTML = agentes.filter((a) => !a.coordenador).map((a) => `<option value="${a.id}">${esc(a.nome)} (${esc(a.papel)})</option>`).join('');
+  $('camadas-skill').value = c.skills[$('camadas-agente').value] ?? '';
+  $('camadas-onde').textContent = `Arquivos em ${pasta || pastaPadrao}/.estudio/ (fora da foto, do diff e do portão).`;
+  $('camadas-resultado').textContent = '';
+  $('dlg-camadas').showModal();
+});
+$('camadas-agente').addEventListener('change', (ev) => { $('camadas-skill').value = rascunhoCamadas.skills[ev.target.value] ?? ''; });
+$('camadas-skill').addEventListener('input', (ev) => {
+  const id = $('camadas-agente').value;
+  rascunhoCamadas.skills[id] = ev.target.value; rascunhoCamadas.mudadas.add(id);
+});
+$('form-camadas').addEventListener('submit', async (ev) => {
+  if (ev.submitter?.value !== 'salvar') return;
+  ev.preventDefault();
+  const skills = Object.fromEntries([...rascunhoCamadas.mudadas].map((id) => [id, rascunhoCamadas.skills[id]]));
+  const r = await ponte.salvarCamadas({ pasta, regras: $('camadas-regras').value, memoria: $('camadas-memoria').value, skills });
+  if (!r.ok) { $('camadas-resultado').textContent = r.erro; return; }
+  $('dlg-camadas').close();
+});
+
 // ---------- cartão do agente: provedor e modelo (R23) ----------
 let editando = null;
 
@@ -835,6 +950,10 @@ $('palco').addEventListener('dblclick', async (ev) => {
   $('editar-papel').textContent = `${a.papel}${a.coordenador ? ' · só responde quando você fala direto com ele' : ''}`;
   f.provedor.value = a.provedor;
   f.modelo.value = a.modelo ?? '';
+  const tem = n.ferramentasDo(a);
+  $('editar-ferramentas').querySelectorAll('input').forEach((c) => { c.checked = tem.includes(c.value); c.disabled = Boolean(a.coordenador); });
+  $('editar-ferramentas').querySelector('legend').textContent = a.coordenador
+    ? 'Ferramentas: nenhuma (o líder não executa)' : 'Ferramentas (a lista é a permissão)';
   f.modelo.placeholder = n.CATALOGO[a.provedor]?.modelo ?? '';
   $('editar-acesso').textContent = acessoDoAgente(a.provedor);
   mostrar($('editar-resultado'), '', '');
@@ -849,7 +968,9 @@ $('form-editar').provedor.addEventListener('change', (ev) => {
 $('form-editar').addEventListener('submit', (ev) => {
   if (ev.submitter?.value !== 'salvar') return;
   try {
-    agentes = n.editarAgente(agentes, editando, Object.fromEntries(new FormData(ev.target)));
+    const dados = new FormData(ev.target);
+    const alvo = agentes.find((x) => x.id === editando);
+    agentes = n.editarAgente(agentes, editando, { ...Object.fromEntries(dados), ...(alvo?.coordenador ? {} : { ferramentas: dados.getAll('ferramenta') }) });
     persistir(); desenhar();
   } catch (e) {
     ev.preventDefault();

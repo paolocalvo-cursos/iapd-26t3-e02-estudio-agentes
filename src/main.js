@@ -87,16 +87,13 @@ function existe(cmd) {
 
 // Quem executa escreve na pasta do projeto; pesquisa e revisão só leem.
 // `modelo` só é passado quando o agente tem um modelo próprio (R23).
+// As permissões vêm da lista de ferramentas do agente (R46, permissoesCli no núcleo).
 const COMANDOS = {
-  claude: (prompt, escrita, modelo) => ['claude', ['-p', prompt, '--output-format', 'text',
-    '--allowedTools', escrita ? 'Read,Grep,Glob,Edit,MultiEdit,Write' : 'Read,Grep,Glob',
-    ...(escrita ? ['--permission-mode', 'acceptEdits'] : []), ...(modelo ? ['--model', modelo] : [])]],
+  claude: (prompt, perm, modelo) => ['claude', ['-p', prompt, '--output-format', 'text', ...perm, ...(modelo ? ['--model', modelo] : [])]],
   // --skip-trust: em modo -p o gemini recusa pasta "não confiável"; a pasta é a que a pessoa escolheu.
-  gemini: (prompt, escrita, modelo) => ['gemini', ['--skip-trust', '--approval-mode', escrita ? 'auto_edit' : 'plan', '-o', 'text',
-    ...(modelo ? ['-m', modelo] : []), '-p', prompt]],
+  gemini: (prompt, perm, modelo) => ['gemini', ['--skip-trust', ...perm, '-o', 'text', ...(modelo ? ['-m', modelo] : []), '-p', prompt]],
   // --skip-git-repo-check: sem ele o codex recusa pastas fora de um repositório git confiável.
-  codex: (prompt, escrita, modelo) => ['codex', ['exec', '--sandbox', escrita ? 'workspace-write' : 'read-only', '--skip-git-repo-check',
-    ...(modelo ? ['-m', modelo] : []), prompt]],
+  codex: (prompt, perm, modelo) => ['codex', ['exec', ...perm, '--skip-git-repo-check', ...(modelo ? ['-m', modelo] : []), prompt]],
 };
 
 const COMO_INSTALAR = {
@@ -267,8 +264,11 @@ function pastaDoProjeto(pasta) {
   return p;
 }
 
-ipcMain.handle('executar-agente', async (_ev, { provedor, modelo: modeloDoAgente, prompt, pasta, escrita }) => {
-  const { CATALOGO, validarModelo } = await nucleo;
+ipcMain.handle('executar-agente', async (_ev, { provedor, modelo: modeloDoAgente, prompt, pasta, escrita, ferramentas }) => {
+  const { CATALOGO, validarModelo, FERRAMENTAS, permissoesCli } = await nucleo;
+  // Sem lista (chamada antiga ou "Testar agente"), vale a escrita: ler, e escrever se pedida.
+  const lista = Array.isArray(ferramentas) ? ferramentas.filter((f) => f in FERRAMENTAS) : ['ler', ...(escrita ? ['escrever'] : [])];
+  escrita = lista.includes('escrever');
   const info = CATALOGO[provedor];
   if (!info) return { ok: false, erro: `Provedor desconhecido: ${provedor}` };
   let proprio;
@@ -290,7 +290,7 @@ ipcMain.handle('executar-agente', async (_ev, { provedor, modelo: modeloDoAgente
     return { ...r, modo };
   }
   if (modo === 'cli') {
-    const [cmd, args] = COMANDOS[provedor](String(prompt), Boolean(escrita), proprio);
+    const [cmd, args] = COMANDOS[provedor](String(prompt), permissoesCli(provedor, lista), proprio);
     return { ...(await rodar(cmd, args, raiz, env)), modo, modelo: proprio || 'padrão da CLI' };
   }
   if (estado.gratuito) {
@@ -593,6 +593,7 @@ ipcMain.handle('foto-tirar', async (_ev, { pasta }) => {
       await fs.promises.writeFile(destino, conteudo);
       hashes[c] = hashDe(conteudo);
     }
+    await fs.promises.mkdir(dir, { recursive: true }); // pasta vazia também tem foto (sem arquivos)
     await fs.promises.writeFile(path.join(dir, 'foto.json'), JSON.stringify({ raiz, criadaEm: Date.now(), hashes, grandes: sel.grandes }));
   } catch (e) {
     await fs.promises.rm(dir, { recursive: true, force: true });
@@ -664,5 +665,66 @@ ipcMain.handle('foto-descartar', async (_ev, { id, pasta }) => {
     return { apagados: plano.apagar, restaurados: plano.restaurar };
   } catch (e) {
     return { erro: e.message };
+  }
+});
+
+// ---------- camadas do projeto e memória longa (R48–R50) ----------
+// Caminhos fixos dentro de .estudio/ na pasta do projeto; a tela nunca escolhe o caminho.
+const LIMITE_ARQUIVO_CAMADA = 100_000;
+
+async function lerSeExiste(arquivo) {
+  try {
+    const st = await fs.promises.lstat(arquivo);
+    if (!st.isFile() || st.size > LIMITE_ARQUIVO_CAMADA) return '';
+    return await fs.promises.readFile(arquivo, 'utf8');
+  } catch { return ''; }
+}
+
+ipcMain.handle('camadas-ler', async (_ev, { pasta }) => {
+  const { ARQUIVOS_DO_PROJETO } = await nucleo;
+  const raiz = path.resolve(pastaDoProjeto(pasta));
+  const skills = {};
+  try {
+    for (const nome of await fs.promises.readdir(path.join(raiz, ARQUIVOS_DO_PROJETO.skills))) {
+      const id = nome.replace(/\.md$/, '');
+      if (nome.endsWith('.md') && /^[a-z0-9-]{1,40}$/.test(id)) skills[id] = await lerSeExiste(path.join(raiz, ARQUIVOS_DO_PROJETO.skills, nome));
+    }
+  } catch { /* sem skills */ }
+  return {
+    regras: await lerSeExiste(path.join(raiz, ARQUIVOS_DO_PROJETO.regras)),
+    memoria: await lerSeExiste(path.join(raiz, ARQUIVOS_DO_PROJETO.memoria)),
+    skills,
+  };
+});
+
+async function gravarCamada(raiz, relativo, texto) {
+  const alvo = await alvoSeguro(raiz, relativo);
+  await fs.promises.mkdir(path.dirname(alvo), { recursive: true });
+  await fs.promises.writeFile(alvo, String(texto ?? '').slice(0, LIMITE_ARQUIVO_CAMADA), 'utf8');
+}
+
+ipcMain.handle('camadas-salvar', async (_ev, { pasta, regras, memoria, skills = {} }) => {
+  const { ARQUIVOS_DO_PROJETO, caminhoDaSkill } = await nucleo;
+  try {
+    const raiz = path.resolve(pastaDoProjeto(pasta));
+    if (typeof regras === 'string') await gravarCamada(raiz, ARQUIVOS_DO_PROJETO.regras, regras);
+    if (typeof memoria === 'string') await gravarCamada(raiz, ARQUIVOS_DO_PROJETO.memoria, memoria);
+    for (const [id, texto] of Object.entries(skills)) await gravarCamada(raiz, caminhoDaSkill(id), texto);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, erro: e.message };
+  }
+});
+
+ipcMain.handle('memoria-anotar', async (_ev, { pasta, entrada }) => {
+  const { ARQUIVOS_DO_PROJETO } = await nucleo;
+  try {
+    const raiz = path.resolve(pastaDoProjeto(pasta));
+    const atual = await lerSeExiste(path.join(raiz, ARQUIVOS_DO_PROJETO.memoria));
+    const cabecalho = atual ? '' : '# Memória do projeto\n\nEscrita pelo Estúdio no fim de cada rodada. Só fatos: pedido, time, portão, veredito e decisão.\n\n';
+    await gravarCamada(raiz, ARQUIVOS_DO_PROJETO.memoria, `${atual}${cabecalho}${String(entrada).slice(0, 2000)}\n`);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, erro: e.message };
   }
 });
