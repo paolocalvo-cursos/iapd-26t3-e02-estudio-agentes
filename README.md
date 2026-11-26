@@ -26,7 +26,7 @@ conferir a orquestração sem custo. Ligue o 🎬 e aperte Enter com a caixa vaz
 1. **Pedido**: a rodada de propostas.
 2. **Plano**: o Maestro chama Chevron e Pixel, com o Revisor no final.
 3. **Execução**: os dois trabalham em paralelo.
-4. **Testes**: o portão falha (`text/plain` em vez de JSON), o trabalho volta só para o Chevron, o portão passa e o Revisor aprova.
+4. **Testes**: o portão falha (`text/plain` em vez de JSON) e o trabalho volta só para o Chevron. O portão passa, e o Revisor devolve a página para o Pixel (fetch sem tempo limite). O Pixel corrige, o portão roda de novo e o Revisor aprova.
 5. **Decisão**: a lista de arquivos para você ler.
 
 As falas ficam em `src/roteiro.mjs` (R31). O painel 🔑 e o "Testar agente" continuam usando os provedores de verdade.
@@ -185,7 +185,7 @@ Abra o app pelo terminal (`npm start`). Assim ele herda o `PATH` onde as CLIs fo
   3. Cada agente entrega e passa o resultado para o próximo.
   
   A rodada e a montagem do time são **regras do app** (palavras-chave de cada papel, ver
-  `REGRAS.md`): não gastam chamada de IA.
+  `docs/regras.md`): não gastam chamada de IA.
 - **Falar com um agente só:** clique no mascote ou no chip acima da caixa de texto.
 - **Comandos sugeridos** em blocos ```bash viram o botão **Executar**, que roda na pasta do projeto
   com limite de 60 s. Os sensíveis (`rm -rf`, `sudo`, `git push`, `curl | sh`, `DROP TABLE`…)
@@ -199,7 +199,7 @@ Abra o app pelo terminal (`npm start`). Assim ele herda o `PATH` onde as CLIs fo
 
 | Arquivo | Papel |
 |---|---|
-| `REGRAS.md` | As regras R1–R35, com entrada, saída e origem. |
+| `docs/regras.md` | As regras R1–R38, com entrada, saída e origem. |
 | `.env.example` | Modelo do `.env`: modo gratuito, chaves e modelos de cada IA. |
 | `src/nucleo.mjs` | **Todas as regras.** Funções puras, sem DOM, Electron nem rede. |
 | `src/renderer.mjs` | Tela: mascotes em SVG, palco, rodada de propostas, chat. |
@@ -209,6 +209,7 @@ Abra o app pelo terminal (`npm start`). Assim ele herda o `PATH` onde as CLIs fo
 | `test/nucleo.test.mjs` | Testes das regras do núcleo. |
 | `test/roteiro.test.mjs` | Testes do roteiro falso: time da Demo 1, falha, devolução, aprovação e descarte. |
 | `test/decisao.test.mjs` | Testes da foto, do diff e do plano de descarte (Manter/Descartar). |
+| `test/revisor.test.mjs` | Testes do veredito do Revisor e da devolução. |
 
 ## Fora do escopo (citado no post)
 

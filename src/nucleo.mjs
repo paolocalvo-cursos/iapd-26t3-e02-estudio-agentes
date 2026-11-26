@@ -179,7 +179,7 @@ export function extrairComandos(texto) {
 
 // ---------- R9: prompt de cada agente ----------
 // O agente recebe o papel, a personalidade, o pedido e o que as etapas anteriores entregaram.
-export function montarPrompt(agente, pedido, anteriores = [], { modo = 'cli' } = {}) {
+export function montarPrompt(agente, pedido, anteriores = [], { modo = 'cli', proximo = null } = {}) {
   const contexto = anteriores.length
     ? '\n\nO que o time já entregou:\n' + anteriores.map((r) => `--- ${r.nome} (${r.papel}) ---\n${r.texto}`).join('\n\n')
     : '';
@@ -199,6 +199,8 @@ export function montarPrompt(agente, pedido, anteriores = [], { modo = 'cli' } =
     pasta,
     'Responda em português do Brasil. Fora dos arquivos, seja curto (até 15 linhas) e fale só da sua parte.',
     'Se sugerir comandos de terminal, coloque-os num bloco ```bash.',
+    ...(ehRevisor(agente) ? [INSTRUCAO_VEREDITO] : []),
+    ...(proximo?.length ? [instrucaoProximo(proximo)] : []),
     `\nPedido do usuário: ${pedido}${contexto}`,
   ].join('\n');
 }
@@ -628,4 +630,175 @@ export function planoDeDescarte({ criados = [], alterados = [], removidos = [] }
 
 export function idDeFotoValido(id) {
   return /^[a-z0-9-]{1,64}$/.test(String(id ?? ''));
+}
+
+// ---------- R36–R38: o Revisor que devolve ----------
+// Quem revisa não é quem escreveu (Aula 16): o Revisor termina com um veredito. DEVOLVER manda os achados
+// de volta para quem escreveu os arquivos citados; depois da correção, o portão roda de novo e o Revisor relê.
+export const MAX_REVISOES = 2;
+
+export const INSTRUCAO_VEREDITO = 'Termine com uma linha "VEREDITO: APROVADO" ou "VEREDITO: DEVOLVER". '
+  + 'Se devolver, liste embaixo cada problema numa linha começando com "- " e citando o arquivo (ex.: "- server.js: 404 sem corpo"). '
+  + 'Devolva só o que impede a entrega; o resto é observação e não volta.';
+
+export function ehRevisor(agente) {
+  return agente?.papel === 'Revisão de código';
+}
+
+export function lerVeredito(texto) {
+  const linhas = String(texto ?? '').split('\n');
+  let onde = -1; let veredito = 'sem-veredito';
+  linhas.forEach((l, i) => {
+    const m = normalizar(l).replace(/[*_`]/g, '').match(/veredito\s*:\s*(aprovad|devolv)/);
+    if (m) { onde = i; veredito = m[1] === 'aprovad' ? 'aprovado' : 'devolver'; }
+  });
+  const achados = veredito !== 'devolver' ? [] : linhas.slice(onde + 1)
+    .map((l) => l.trim()).filter((l) => /^[-*]\s+/.test(l)).map((l) => l.replace(/^[-*]\s+/, ''));
+  return { veredito, achados };
+}
+
+export function decidirRevisao(veredito, rodada, max = MAX_REVISOES) {
+  if (veredito !== 'devolver') return 'seguir';
+  return rodada <= max ? 'devolver' : 'desistir';
+}
+
+export function falhaDaRevisao({ achados = [], texto = '' }, rodada, max = MAX_REVISOES) {
+  const lista = achados.length ? achados.map((a) => `- ${a}`).join('\n') : texto.trim();
+  return {
+    nome: 'Revisor', papel: 'revisão de código',
+    texto: `Revisão ${rodada} de ${max + 1}. O Revisor devolveu o trabalho. Corrija só o que ele apontou na sua parte; `
+      + `não apague nem enfraqueça testes. Depois da correção, o portão de testes roda de novo.\nAchados:\n${lista}`,
+  };
+}
+
+// ---------- R39–R43: as arquiteturas do time (Aula 16, bloco 3) ----------
+// Cinco jeitos de montar o time, duas variações e o construtor. O plano é uma lista de etapas em sequência;
+// dentro de cada etapa, os agentes trabalham em paralelo. { frentes } é a etapa da hierárquica; a rede não tem
+// etapas fixas: quem termina escolhe quem continua.
+export const ARQUITETURAS = Object.freeze({
+  unico: { nome: 'Agente único', resumo: 'Um agente faz tudo', quando: 'Pequena, com passos que dependem um do outro', cuidado: 'Contexto estourando', lider: false },
+  supervisor: { nome: 'Supervisor', resumo: 'Um líder planeja e distribui; todos respondem a ele', quando: 'Média, com partes separáveis e alguém para conferir', cuidado: 'Líder sobrecarregado', lider: true },
+  hierarquica: { nome: 'Hierárquica', resumo: 'O líder divide em frentes, cada uma com um sub-líder', quando: 'Grande, com frentes que têm dono (back, front, dados)', cuidado: 'Custo e recado perdido', lider: true },
+  esteira: { nome: 'Esteira', resumo: 'Cada etapa passa para a seguinte, numa ordem fixa', quando: 'Um processo conhecido, sempre na mesma ordem', cuidado: 'Erro no início da fila', lider: false },
+  rede: { nome: 'Rede', resumo: 'Quem termina escolhe quem continua', quando: 'Exploratória, sem caminho definido de antemão', cuidado: 'Voltas sem fim', lider: false },
+  dupla: { nome: 'Dupla com revisão', resumo: 'Um escreve, o Revisor confere', quando: 'Pequena, mas que precisa de um segundo olhar', cuidado: 'Revisor sem contexto do todo', lider: false, variacao: true },
+  'rede-escolhida': { nome: 'Rede com ligações escolhidas', resumo: 'Rede, mas cada um só passa para quem você ligou', quando: 'Exploratória, com caminhos que você quer limitar', cuidado: 'Ligação faltando trava o time', lider: false, variacao: true },
+  construtor: { nome: 'Construtor', resumo: 'Você monta as etapas arrastando os agentes', quando: 'Quando nenhum desenho pronto serve', cuidado: 'O desenho é seu: o juiz continua de fora', lider: false },
+});
+
+export const MAX_PASSOS_REDE = 6;
+export const MAX_VISITAS_REDE = 2;
+
+const ehPesquisa = (a) => a?.papel === 'Pesquisa';
+const nomeDe = (agentes, id) => agentes.find((a) => a.id === id)?.nome ?? id;
+const listaDeNomes = (agentes, ids) => ids.map((id) => nomeDe(agentes, id)).join(ids.length > 2 ? ', ' : ' e ').replace(/, ([^,]+)$/, ' e $1');
+
+function porConfianca(agentes, propostas, filtro) {
+  const conf = (id) => propostas.find((p) => p.id === id)?.confianca ?? 0;
+  return agentes.filter((a) => !a.coordenador && filtro(a)).sort((x, y) => conf(y.id) - conf(x.id)).map((a) => a.id);
+}
+
+export function montarPlano(arquitetura, agentes, propostas, { ligacoes = {}, etapasConstrutor = [] } = {}) {
+  const coordenador = agentes.find((a) => a.coordenador)?.id ?? null;
+  const executores = porConfianca(agentes, propostas, podeEscrever);
+  const revisor = agentes.find(ehRevisor)?.id;
+  const naoCoord = agentes.filter((a) => !a.coordenador).map((a) => a.id);
+  switch (arquitetura) {
+    case 'unico': {
+      const quem = executores[0] ?? naoCoord[0];
+      return { etapas: [[quem]], lider: null, mensagem: `Agente único: ${nomeDe(agentes, quem)} faz tudo, do começo ao fim. O portão de testes continua conferindo.` };
+    }
+    case 'dupla': {
+      const quem = executores[0] ?? naoCoord[0];
+      const etapas = revisor && revisor !== quem ? [[quem], [revisor]] : [[quem]];
+      return { etapas, lider: null, mensagem: `Dupla com revisão: ${nomeDe(agentes, quem)} escreve${etapas.length > 1 ? `, ${nomeDe(agentes, revisor)} confere` : ' (não há revisor no time)'}.` };
+    }
+    case 'esteira': {
+      const ordem = [...agentes.filter((a) => !a.coordenador && ehPesquisa(a)), ...agentes.filter((a) => podeEscrever(a)), ...agentes.filter((a) => ehRevisor(a))];
+      return { etapas: ordem.map((a) => [a.id]), lider: null, mensagem: `Esteira: ${ordem.map((a) => a.nome).join(' → ')}. Cada um recebe o que o anterior entregou.` };
+    }
+    case 'construtor': {
+      const ids = new Set(agentes.map((a) => a.id));
+      const etapas = etapasConstrutor.map((e) => e.filter((id) => ids.has(id))).filter((e) => e.length);
+      if (!etapas.length) return { erro: 'Monte as etapas no construtor (botão do time, no topo) antes de pedir.' };
+      return { etapas, lider: null, mensagem: `Construtor: ${etapas.map((e, i) => `etapa ${i + 1} (${listaDeNomes(agentes, e)})`).join(' → ')}.` };
+    }
+    case 'hierarquica': {
+      const { etapas } = montarTime(agentes, propostas);
+      const porId = new Map(agentes.map((a) => [a.id, a]));
+      const comExecucao = etapas.map((e) => (e.some((id) => podeEscrever(porId.get(id))) ? e : null));
+      const i = comExecucao.findIndex(Boolean);
+      if (i < 0) return { etapas, lider: coordenador, mensagem: mensagemDoMaestro(etapas, porId) };
+      const areas = new Map();
+      etapas[i].forEach((id) => { const p = porId.get(id).papel; areas.set(p, [...(areas.get(p) ?? []), id]); });
+      const frentes = [...areas.values()];
+      const novas = [...etapas.slice(0, i), { frentes }, ...etapas.slice(i + 1)];
+      const descricao = [...areas.entries()].map(([papel, ids]) => `${papel} (sub-líder: ${nomeDe(agentes, ids[0])})`).join(' e ');
+      const fim = etapas.slice(i + 1).flat();
+      return {
+        etapas: novas, lider: coordenador,
+        mensagem: `Divido em ${frentes.length} ${frentes.length > 1 ? 'frentes' : 'frente'}: ${descricao}. Cada frente tem o próprio portão de testes.${fim.length ? ` ${listaDeNomes(agentes, fim)} confere tudo no final.` : ''}`,
+      };
+    }
+    case 'rede':
+    case 'rede-escolhida': {
+      const escolhida = arquitetura === 'rede-escolhida';
+      const vizinhos = Object.fromEntries(naoCoord.map((id) => [id, escolhida
+        ? (ligacoes[id] ?? []).filter((v) => v !== id && naoCoord.includes(v))
+        : naoCoord.filter((v) => v !== id)]));
+      const inicio = porConfianca(agentes, propostas, () => true)[0];
+      return {
+        etapas: null, lider: null, rede: { inicio, vizinhos },
+        mensagem: `${ARQUITETURAS[arquitetura].nome}: ${nomeDe(agentes, inicio)} começa; quem termina escolhe quem continua (até ${MAX_PASSOS_REDE} passos).`,
+      };
+    }
+    default: {
+      const { etapas, mensagem } = montarTime(agentes, propostas);
+      return { etapas, lider: coordenador, mensagem };
+    }
+  }
+}
+
+export function instrucaoProximo(nomes) {
+  return `No fim, escreva uma linha "PRÓXIMO: <nome>" com quem deve continuar (opções: ${nomes.join(', ')}) `
+    + 'ou "PRÓXIMO: ninguém" se o pedido já está pronto.';
+}
+
+// Lê o "PRÓXIMO:" (o último vale). undefined = sem linha; null = ninguém; senão, o id do vizinho escolhido.
+function lerProximo(texto, candidatos) {
+  let escolha;
+  for (const l of String(texto ?? '').split('\n')) {
+    const m = normalizar(l).replace(/[*_`]/g, '').match(/proximo\s*:\s*(.+)/);
+    if (m) escolha = m[1].trim();
+  }
+  if (escolha === undefined) return undefined;
+  if (/^(ninguem|nenhum|pronto|fim)\b/.test(escolha)) return null;
+  return candidatos.find((a) => escolha.startsWith(normalizar(a.nome)) || escolha.startsWith(a.id))?.id ?? undefined;
+}
+
+export function escolherProximo({ texto, vizinhos = [], visitas = {}, propostas = [], agentes = [] }) {
+  const candidatos = agentes.filter((a) => vizinhos.includes(a.id));
+  const escolha = lerProximo(texto, candidatos);
+  if (escolha === null) return null;
+  if (escolha && (visitas[escolha] ?? 0) < MAX_VISITAS_REDE) return escolha;
+  const conf = (id) => propostas.find((p) => p.id === id)?.confianca ?? 0;
+  return vizinhos.filter((v) => !visitas[v]).sort((x, y) => conf(y) - conf(x))[0] ?? null;
+}
+
+// R43: o tipo da tarefa decide, não o número de agentes (tabela "Qual usar, e quando").
+const SINAIS_ESTEIRA = ['sempre', 'processo', 'pipeline', 'etapa', 'ordem', 'passo a passo', 'rotina', 'checklist'];
+const SINAIS_REDE = ['explor', 'investig', 'descobr', 'ideia', 'brainstorm', 'nao sei', 'possibilidade', 'alternativa'];
+const SINAIS_GRANDE = ['sistema', 'completo', 'inteiro', 'plataforma', 'modulos', 'tudo'];
+
+export function sugerirArquitetura(pedido, agentes) {
+  const palavras = palavrasDo(pedido);
+  const casa = (lista) => lista.some((c) => casaChave(palavras, c));
+  const porId = new Map(agentes.map((a) => [a.id, a]));
+  const areas = new Set(rodadaDePropostas(agentes, pedido).filter((p) => p.aceita && podeEscrever(porId.get(p.id))).map((p) => porId.get(p.id).papel));
+  let id = 'unico';
+  if (casa(SINAIS_ESTEIRA)) id = 'esteira';
+  else if (casa(SINAIS_REDE)) id = 'rede';
+  else if (areas.size >= 2 && (palavras.length > 30 || casa(SINAIS_GRANDE))) id = 'hierarquica';
+  else if (areas.size >= 2) id = 'supervisor';
+  return { id, motivo: ARQUITETURAS[id].quando };
 }

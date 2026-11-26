@@ -42,6 +42,8 @@ const PAGINA = `<!doctype html>
 </script>
 </html>`;
 
+const PAGINA_CORRIGIDA = PAGINA.replace("fetch('/health')", "fetch('/health', { signal: AbortSignal.timeout(3000) })");
+
 const bloco = (caminho, conteudo) => '```arquivo:' + caminho + '\n' + conteudo + '\n```';
 
 // Falas por agente do time padrão; agente criado na tela cai no genérico, pelo papel.
@@ -61,14 +63,30 @@ const FALAS = {
       texto: `O portão tem razão: eu mandava \`text/plain\`. Corrigido para \`application/json\`; o teste ficou como estava.\n\n${bloco('server.js', SERVIDOR_CORRIGIDO)}`,
       arquivos: { 'server.js': SERVIDOR_CORRIGIDO },
     }),
-  pixel: () => ({
-    texto: `Página em \`public/index.html\`: lê o /health e mostra o estado num \`role="status"\`, que o leitor de tela anuncia.\n\n${bloco('public/index.html', PAGINA)}`,
-    arquivos: { 'public/index.html': PAGINA },
+  pixel: (vez) => (vez === 1
+    ? {
+      texto: `Página em \`public/index.html\`: lê o /health e mostra o estado num \`role="status"\`, que o leitor de tela anuncia.\n\n${bloco('public/index.html', PAGINA)}`,
+      arquivos: { 'public/index.html': PAGINA },
+    }
+    : {
+      texto: `Justo. O fetch agora desiste em 3 s e a página mostra "fora do ar" em vez de ficar em "consultando…".\n\n${bloco('public/index.html', PAGINA_CORRIGIDA)}`,
+      arquivos: { 'public/index.html': PAGINA_CORRIGIDA },
+    }),
+  revisor: (vez) => ({
+    texto: vez === 1
+      ? 'Li o diff e a saída do portão. O `text/plain` o portão já pegou e o Chevron corrigiu sem mexer no teste. '
+        + 'Mas a página fica presa em "consultando…" se o servidor travar.\n\nVEREDITO: DEVOLVER\n'
+        + '- public/index.html: o fetch do /health não tem tempo limite; servidor travado deixa a tela em "consultando…" para sempre'
+      : 'Reli: o fetch desiste em 3 s e cai no "fora do ar". O teste do /health continua igual.\n\nVEREDITO: APROVADO',
   }),
-  revisor: () => ({
-    texto: 'Li o diff e a saída do portão. A primeira versão mandava JSON com `text/plain`; o portão pegou e o Chevron corrigiu sem mexer no teste. '
-      + 'Ainda falta: a página não trata resposta lenta (sem tempo limite no fetch). Não bloqueia. **Aprovo.**',
-  }),
+};
+
+// Na rede, quem cada um escolhe para continuar (só vale se a pessoa estiver entre os vizinhos).
+const CORRENTE = {
+  scout: () => 'Chevron',
+  chevron: (vez) => (vez === 1 ? 'Pixel' : 'Revisor'),
+  pixel: () => 'Revisor',
+  revisor: (vez) => (vez === 1 ? 'Pixel' : 'ninguém'),
 };
 
 function falaGenerica(agente, escrita, vez) {
@@ -97,11 +115,16 @@ export function criarPonteFalsa({ agentes = [], ritmo = 1 } = {}) {
     pastaPadrao: async () => '(roteiro falso: nada é gravado no disco)',
     escolherPasta: async () => null,
 
-    async executarAgente({ agente: id, escrita = false } = {}) {
+    async executarAgente({ agente: id, escrita = false, prompt = '' } = {}) {
       const agente = agentes.find((a) => a.id === id) ?? { id: id ?? 'agente', nome: id ?? 'Agente', papel: 'agente', provedor: 'claude' };
       const vez = (vezes[agente.id] = (vezes[agente.id] ?? 0) + 1);
       await esperar(1400 + 500 * (agentes.indexOf(agente) % 3));
-      const fala = FALAS[agente.id]?.(vez) ?? falaGenerica(agente, escrita, vez);
+      const fala = { ...(FALAS[agente.id]?.(vez) ?? falaGenerica(agente, escrita, vez)) };
+      const opcoes = /opções: ([^)]*)\)/.exec(prompt ?? '')?.[1]?.split(', ') ?? null; // a rede pediu "PRÓXIMO:"
+      if (opcoes) {
+        const quer = CORRENTE[agente.id]?.(vez);
+        if (quer === 'ninguém' || opcoes.includes(quer)) fala.texto += `\n\nPRÓXIMO: ${quer}`;
+      }
       const caminhos = escrita ? Object.keys(fala.arquivos ?? {}) : [];
       caminhos.forEach((c) => { gravados.set(c, agente.id); conteudos.set(c, fala.arquivos[c]); });
       return { ok: true, saida: fala.texto, modo: 'roteiro', modelo: CATALOGO[agente.provedor]?.modelo, gravados: caminhos };

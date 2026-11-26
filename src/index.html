@@ -26,6 +26,7 @@
       <ol id="passos" class="passos" aria-label="Passos da Demo 1">
         <li data-passo="pedido">Pedido</li><li data-passo="plano">Plano</li><li data-passo="execucao">Execução</li><li data-passo="testes">Testes</li><li data-passo="decisao">Decisão</li>
       </ol>
+      <button id="btn-time" class="pilula" title="Como o time se organiza (arquitetura)">🏗 <span id="nome-arquitetura">Supervisor</span></button>
       <button id="btn-projeto" class="pilula">📁 <span id="nome-projeto">estudio-projetos (padrão)</span></button>
     </header>
 
@@ -76,6 +77,24 @@
       <div id="lista-chaves" class="lista-chaves"></div>
       <p class="nota">"Testar" confere a chave e o modelo sem gerar texto (não custa tokens). Falta de crédito só aparece em "Testar agente", no cartão de cada agente.</p>
       <menu><button value="fechar" class="primario">Fechar</button></menu>
+    </form>
+  </dialog>
+
+  <dialog id="dlg-time" class="largo">
+    <form method="dialog" id="form-time">
+      <h2>Como montar o time</h2>
+      <p class="nota">O tipo da tarefa decide, não o número de agentes. Em todos, o juiz fica de fora: o portão de testes roda depois de quem escreve.</p>
+      <div id="lista-arquiteturas" class="lista-arquiteturas"></div>
+      <section id="painel-ligacoes" hidden>
+        <h3>Ligações: quem pode passar para quem</h3>
+        <div id="grade-ligacoes"></div>
+      </section>
+      <section id="painel-construtor" hidden>
+        <h3>Construtor: arraste os agentes para as etapas</h3>
+        <p class="nota">As etapas rodam em ordem; na mesma etapa, em paralelo. O coordenador não entra: o líder não executa.</p>
+        <div id="construtor" class="construtor"></div>
+      </section>
+      <menu><button value="cancelar" formnovalidate>Cancelar</button><button value="salvar" class="primario">Usar este time</button></menu>
     </form>
   </dialog>
 

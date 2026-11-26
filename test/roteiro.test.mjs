@@ -87,3 +87,15 @@ test('R35 no roteiro: Descartar da 2ª rodada devolve o arquivo da 1ª', async (
   await p.descartarFoto({ id });
   assert.equal(n.totalDeMudancas((await p.diffFoto({ id: (await p.tirarFoto()).id }))), 0);
 });
+
+test('R36 no roteiro: o Revisor devolve a página para o Pixel e aprova depois da correção', async () => {
+  const p = criarPonteFalsa({ agentes: T, ritmo: 0 });
+  const autoria = {};
+  for (const id of ['chevron', 'pixel']) (await chamar(p, id)).gravados.forEach((c) => { autoria[c] = id; });
+  const r1 = n.lerVeredito((await chamar(p, 'revisor')).saida);
+  assert.equal(r1.veredito, 'devolver');
+  assert.equal(n.decidirRevisao(r1.veredito, 1), 'devolver');
+  assert.deepEqual(n.quemCorrige(r1.achados.join('\n'), autoria, ['chevron', 'pixel']), ['pixel']);
+  assert.match((await chamar(p, 'pixel')).saida, /AbortSignal\.timeout/);
+  assert.equal(n.lerVeredito((await chamar(p, 'revisor')).saida).veredito, 'aprovado');
+});
