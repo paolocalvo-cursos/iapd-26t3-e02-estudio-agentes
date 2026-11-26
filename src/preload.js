@@ -19,4 +19,7 @@ contextBridge.exposeInMainWorld('estudio', {
   diffFoto: (dados) => ipcRenderer.invoke('foto-diff', dados),
   manterFoto: (dados) => ipcRenderer.invoke('foto-manter', dados),
   descartarFoto: (dados) => ipcRenderer.invoke('foto-descartar', dados),
+  lerCamadas: (dados) => ipcRenderer.invoke('camadas-ler', dados),
+  salvarCamadas: (dados) => ipcRenderer.invoke('camadas-salvar', dados),
+  anotarMemoria: (dados) => ipcRenderer.invoke('memoria-anotar', dados),
 });

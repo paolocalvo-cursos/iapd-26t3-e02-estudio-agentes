@@ -48,45 +48,63 @@ const bloco = (caminho, conteudo) => '```arquivo:' + caminho + '\n' + conteudo +
 
 // Falas por agente do time padrão; agente criado na tela cai no genérico, pelo papel.
 // Cada fala devolve { texto, arquivos: { caminho: conteudo } }. `vez` conta a partir de 1.
+// As falas olham o estado da "pasta" (c) e o recado recebido (prompt), não quantas vezes o agente já falou:
+// assim a história fecha em qualquer arquitetura (único, dupla, esteira, hierárquica, rede…).
+const pediuCorrecao = (prompt) => /O portão rodou|O Revisor devolveu|VEREDITO: DEVOLVER/.test(prompt); // na rede, a devolução vem no contexto
+const servidorComBug = (c) => Boolean(c.get('server.js')?.includes("'text/plain'"));
+const paginaSemPrazo = (c) => c.has('public/index.html') && !c.get('public/index.html').includes('AbortSignal');
+
 const FALAS = {
   maestro: () => ({ texto: 'Coordeno, não executo. Mande o pedido para o Time que eu divido o trabalho.' }),
   scout: () => ({
     texto: 'Referência: health check responde **200** com corpo JSON e `Content-Type: application/json`; '
       + 'o próprio `node:http` resolve, sem biblioteca. Quem consome (balanceador, Kubernetes) só olha o código de status.',
   }),
-  chevron: (vez) => (vez === 1
-    ? {
+  chevron: ({ c, prompt }) => {
+    if (servidorComBug(c) && pediuCorrecao(prompt)) {
+      return {
+        texto: `O portão tem razão: eu mandava \`text/plain\`. Corrigido para \`application/json\`; o teste ficou como estava.\n\n${bloco('server.js', SERVIDOR_CORRIGIDO)}`,
+        arquivos: { 'server.js': SERVIDOR_CORRIGIDO },
+      };
+    }
+    if (c.has('server.js') && !servidorComBug(c)) return { texto: 'O /health já responde JSON e o teste passa. Nada a mudar na minha parte.' };
+    return {
       texto: `Endpoint pronto em \`server.js\`, com teste.\n\n${bloco('server.js', SERVIDOR_COM_BUG)}\n\n${bloco('test/health.test.mjs', TESTE)}`,
       arquivos: { 'server.js': SERVIDOR_COM_BUG, 'test/health.test.mjs': TESTE },
+    };
+  },
+  pixel: ({ c, prompt }) => {
+    if (paginaSemPrazo(c) && pediuCorrecao(prompt)) {
+      return {
+        texto: `Justo. O fetch agora desiste em 3 s e a página mostra "fora do ar" em vez de ficar em "consultando…".\n\n${bloco('public/index.html', PAGINA_CORRIGIDA)}`,
+        arquivos: { 'public/index.html': PAGINA_CORRIGIDA },
+      };
     }
-    : {
-      texto: `O portão tem razão: eu mandava \`text/plain\`. Corrigido para \`application/json\`; o teste ficou como estava.\n\n${bloco('server.js', SERVIDOR_CORRIGIDO)}`,
-      arquivos: { 'server.js': SERVIDOR_CORRIGIDO },
-    }),
-  pixel: (vez) => (vez === 1
-    ? {
+    if (c.has('public/index.html')) return { texto: 'A página já está na pasta. Nada a mudar na minha parte.' };
+    return {
       texto: `Página em \`public/index.html\`: lê o /health e mostra o estado num \`role="status"\`, que o leitor de tela anuncia.\n\n${bloco('public/index.html', PAGINA)}`,
       arquivos: { 'public/index.html': PAGINA },
+    };
+  },
+  revisor: ({ c }) => {
+    if (paginaSemPrazo(c)) {
+      return { texto: 'Li o diff e a saída do portão. A página fica presa em "consultando…" se o servidor travar.\n\nVEREDITO: DEVOLVER\n'
+        + '- public/index.html: o fetch do /health não tem tempo limite; servidor travado deixa a tela em "consultando…" para sempre' };
     }
-    : {
-      texto: `Justo. O fetch agora desiste em 3 s e a página mostra "fora do ar" em vez de ficar em "consultando…".\n\n${bloco('public/index.html', PAGINA_CORRIGIDA)}`,
-      arquivos: { 'public/index.html': PAGINA_CORRIGIDA },
-    }),
-  revisor: (vez) => ({
-    texto: vez === 1
-      ? 'Li o diff e a saída do portão. O `text/plain` o portão já pegou e o Chevron corrigiu sem mexer no teste. '
-        + 'Mas a página fica presa em "consultando…" se o servidor travar.\n\nVEREDITO: DEVOLVER\n'
-        + '- public/index.html: o fetch do /health não tem tempo limite; servidor travado deixa a tela em "consultando…" para sempre'
-      : 'Reli: o fetch desiste em 3 s e cai no "fora do ar". O teste do /health continua igual.\n\nVEREDITO: APROVADO',
-  }),
+    if (servidorComBug(c)) {
+      return { texto: 'O portão não aprovou e o servidor continua mandando `text/plain`.\n\nVEREDITO: DEVOLVER\n- server.js: o /health responde JSON com Content-Type text/plain' };
+    }
+    if (!c.size) return { texto: 'Não há nada na pasta para revisar.\n\nVEREDITO: APROVADO' };
+    return { texto: `Reli ${[...c.keys()].map((k) => `\`${k}\``).join(', ')}. O /health responde JSON${c.has('public/index.html') ? ' e a página desiste em 3 s' : ''}; o teste continua igual.\n\nVEREDITO: APROVADO` };
+  },
 };
 
 // Na rede, quem cada um escolhe para continuar (só vale se a pessoa estiver entre os vizinhos).
 const CORRENTE = {
   scout: () => 'Chevron',
-  chevron: (vez) => (vez === 1 ? 'Pixel' : 'Revisor'),
+  chevron: (c) => (c.has('public/index.html') ? 'Revisor' : 'Pixel'),
   pixel: () => 'Revisor',
-  revisor: (vez) => (vez === 1 ? 'Pixel' : 'ninguém'),
+  revisor: (c) => (paginaSemPrazo(c) ? 'Pixel' : servidorComBug(c) ? 'Chevron' : 'ninguém'),
 };
 
 function falaGenerica(agente, escrita, vez) {
@@ -96,6 +114,9 @@ function falaGenerica(agente, escrita, vez) {
   return { texto: `Minha parte (${agente.papel}) ficou em \`${caminho}\`.\n\n${bloco(caminho, conteudo)}`, arquivos: { [caminho]: conteudo } };
 }
 
+// Camadas e memória do roteiro valem entre pedidos (cada pedido cria uma ponte nova): ficam no módulo.
+const camadas = { regras: '', memoria: '', skills: {} };
+
 // ritmo: 1 = velocidade de apresentação; 0 = sem espera (testes).
 export function criarPonteFalsa({ agentes = [], ritmo = 1 } = {}) {
   const esperar = (ms) => (ritmo > 0 ? new Promise((r) => setTimeout(r, ms * ritmo)) : Promise.resolve());
@@ -103,11 +124,8 @@ export function criarPonteFalsa({ agentes = [], ritmo = 1 } = {}) {
   const gravados = new Map(); // caminho -> id de quem escreveu por último
   const conteudos = new Map(); // a "pasta" do roteiro: caminho -> conteúdo
   const fotos = new Map(); // id -> cópia de `conteudos`
-  let portoes = 0;
   const comoHashes = (m) => Object.fromEntries(m); // no roteiro, o próprio conteúdo serve de hash
 
-  // Arquivo que a falha cita: o server.js se alguém o escreveu; senão, o primeiro gravado.
-  const citado = () => (gravados.has('server.js') ? 'server.js' : [...gravados.keys()][0]);
 
   return {
     roteiro: true,
@@ -119,10 +137,10 @@ export function criarPonteFalsa({ agentes = [], ritmo = 1 } = {}) {
       const agente = agentes.find((a) => a.id === id) ?? { id: id ?? 'agente', nome: id ?? 'Agente', papel: 'agente', provedor: 'claude' };
       const vez = (vezes[agente.id] = (vezes[agente.id] ?? 0) + 1);
       await esperar(1400 + 500 * (agentes.indexOf(agente) % 3));
-      const fala = { ...(FALAS[agente.id]?.(vez) ?? falaGenerica(agente, escrita, vez)) };
+      const fala = { ...(FALAS[agente.id]?.({ c: conteudos, prompt }) ?? falaGenerica(agente, escrita, vez)) };
       const opcoes = /opções: ([^)]*)\)/.exec(prompt ?? '')?.[1]?.split(', ') ?? null; // a rede pediu "PRÓXIMO:"
       if (opcoes) {
-        const quer = CORRENTE[agente.id]?.(vez);
+        const quer = CORRENTE[agente.id]?.(conteudos);
         if (quer === 'ninguém' || opcoes.includes(quer)) fala.texto += `\n\nPRÓXIMO: ${quer}`;
       }
       const caminhos = escrita ? Object.keys(fala.arquivos ?? {}) : [];
@@ -136,16 +154,14 @@ export function criarPonteFalsa({ agentes = [], ritmo = 1 } = {}) {
 
     async portao({ houveMudanca } = {}) {
       if (!houveMudanca) return { situacao: 'pulou' };
-      portoes += 1;
       await esperar(1200);
       const base = { comando: COMANDO_DO_ROTEIRO, origem: 'roteiro falso', ms: 900 };
-      if (portoes === 1) {
-        const arquivo = citado();
+      if (servidorComBug(conteudos)) { // o portão só reprova enquanto o bug do Content-Type estiver lá
         const resumo = [
           '✖ /health responde JSON',
-          '  AssertionError: The input did not match /application\\/json/',
+          '  AssertionError: The input did not match /application\/json/',
           "  actual: 'text/plain'",
-          `      at ${arquivo}:5`,
+          '      at server.js:5',
           'ℹ tests 1 · pass 0 · fail 1',
         ].join('\n');
         return { ...base, situacao: 'falhou', codigo: 1, resumo, saida: resumo };
@@ -187,6 +203,16 @@ export function criarPonteFalsa({ agentes = [], ritmo = 1 } = {}) {
       fotos.delete(id);
       return { apagados: plano.apagar, restaurados: plano.restaurar };
     },
+
+    // R48–R50 no roteiro: camadas e memória em memória, como a "pasta".
+    async lerCamadas() { return { ...camadas, skills: { ...camadas.skills } }; },
+    async salvarCamadas({ regras, memoria, skills = {} } = {}) {
+      if (typeof regras === 'string') camadas.regras = regras;
+      if (typeof memoria === 'string') camadas.memoria = memoria;
+      Object.assign(camadas.skills, skills);
+      return { ok: true };
+    },
+    async anotarMemoria({ entrada } = {}) { camadas.memoria += `${entrada}\n`; return { ok: true }; },
 
     async executarComando({ comando } = {}) {
       return { ok: true, saida: `(roteiro falso: "${comando}" não rodou de verdade)` };

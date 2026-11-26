@@ -14,6 +14,7 @@
     <button id="btn-novo-agente" title="Novo agente">＋</button>
     <button id="btn-chaves" title="Chaves e provedores">🔑</button>
     <button id="btn-roteiro" title="Roteiro falso: repete a Demo 1 sem chamar modelo">🎬</button>
+    <button id="btn-camadas" title="Instruções (regras do projeto e skills) e memória">📜</button>
     <span class="vao"></span>
   </nav>
 
@@ -96,6 +97,21 @@
         <div id="construtor" class="construtor"></div>
       </section>
       <menu><button value="cancelar" formnovalidate>Cancelar</button><button value="salvar" class="primario">Usar este time</button></menu>
+    </form>
+  </dialog>
+
+  <dialog id="dlg-camadas" class="largo">
+    <form method="dialog" id="form-camadas">
+      <h2>Instruções e memória</h2>
+      <p class="nota">Camada 1 é o papel de cada agente; camada 2, o pedido. Aqui ficam as camadas 3 e 4 e a memória longa. <span id="camadas-onde"></span></p>
+      <label>Camada 3 · Regras do projeto (valem para todos, sempre)
+        <textarea id="camadas-regras" rows="5" placeholder="Ex.: testes com node:test; nada de dependência nova sem pedir; mensagens em português."></textarea></label>
+      <label>Camada 4 · Skill (o jeito de fazer) de <select id="camadas-agente"></select>
+        <textarea id="camadas-skill" rows="4" placeholder="Ex.: todo endpoint novo vem com teste e com o código de status documentado."></textarea></label>
+      <label>Memória do projeto (o Estúdio anota um resumo no fim de cada rodada; as 5 últimas entradas vão para os agentes)
+        <textarea id="camadas-memoria" rows="6"></textarea></label>
+      <p id="camadas-resultado" class="erro"></p>
+      <menu><button value="cancelar" formnovalidate>Cancelar</button><button value="salvar" class="primario">Salvar</button></menu>
     </form>
   </dialog>
 

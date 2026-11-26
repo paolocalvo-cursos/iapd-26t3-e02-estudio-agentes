@@ -97,3 +97,11 @@ test('R43 qual usar: o tipo da tarefa decide, não o número de agentes', () => 
   assert.equal(sug('Explore alternativas para cache, não sei qual caminho é melhor'), 'rede');
   assert.match(n.sugerirArquitetura(PEDIDO, T).motivo, /partes separáveis/);
 });
+
+test('R40 hierárquica: falha que só cita arquivo de outra frente não volta para esta', () => {
+  const autoria = { 'server.js': 'chevron', 'public/index.html': 'pixel' };
+  const resumo = '✖ /health\n      at server.js:5';
+  assert.equal(n.falhaEDeOutros(resumo, autoria, ['pixel']), true);
+  assert.equal(n.falhaEDeOutros(resumo, autoria, ['chevron']), false);
+  assert.equal(n.falhaEDeOutros('falhou sem citar arquivo', autoria, ['pixel']), false);
+});

@@ -55,6 +55,19 @@ dê um duplo clique no agente. Os padrões seguem a Aula 16:
 Quem escreve não pode acessar a rede, e o Estúdio recusa essa combinação. A lista vira as flags de cada CLI (R46).
 Limite conhecido: pela API, os agentes não têm ferramentas próprias, e só Escrever tem efeito (grava os arquivos).
 
+## Instruções em camadas e memória (botão 📜)
+
+O prompt de cada agente tem as quatro camadas da Aula 16:
+
+1. **Papel**: quem ele é e quais ferramentas tem.
+2. **Objetivo**: o pedido e o critério de pronto.
+3. **Regras do projeto**: valem para todos, sempre.
+4. **Skill**: o jeito de fazer daquele agente.
+
+As camadas 3 e 4 e a memória ficam em `.estudio/` na pasta do projeto (`regras.md`, `skills/<id>.md`, `memoria.md`) e
+se editam no 📜. No fim de cada rodada, o Estúdio anota na memória só fatos: pedido, time, portão, veredito e
+decisão. Nada do texto dos agentes entra. As 5 últimas entradas voltam no começo de cada trabalho.
+
 ## Chaves e provedores (botão 🔑)
 
 - **Colar a chave pela tela:** o botão 🔑 lista os provedores (Anthropic, Gemini, OpenAI, Groq, OpenRouter e Ollama).
@@ -212,7 +225,7 @@ Abra o app pelo terminal (`npm start`). Assim ele herda o `PATH` onde as CLIs fo
 
 | Arquivo | Papel |
 |---|---|
-| `docs/regras.md` | As regras R1–R47, com entrada, saída e origem. |
+| `docs/regras.md` | As regras R1–R50, com entrada, saída e origem. |
 | `.env.example` | Modelo do `.env`: modo gratuito, chaves e modelos de cada IA. |
 | `src/nucleo.mjs` | **Todas as regras.** Funções puras, sem DOM, Electron nem rede. |
 | `src/renderer.mjs` | Tela: mascotes em SVG, palco, rodada de propostas, chat. |
@@ -225,6 +238,7 @@ Abra o app pelo terminal (`npm start`). Assim ele herda o `PATH` onde as CLIs fo
 | `test/revisor.test.mjs` | Testes do veredito do Revisor e da devolução. |
 | `test/arquiteturas.test.mjs` | Testes dos 8 modelos de time, da rede e da sugestão "qual usar". |
 | `test/ferramentas.test.mjs` | Testes das ferramentas por agente e das flags de cada CLI. |
+| `test/camadas.test.mjs` | Testes das 4 camadas do prompt e da memória longa. |
 
 ## Fora do escopo (citado no post)
 

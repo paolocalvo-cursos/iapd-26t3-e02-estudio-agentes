@@ -29,6 +29,8 @@ let ocupado = false;
 let provedores = { modos: {}, chaves: [] };
 const baloes = new Map();
 const saidas = new Map(); // comando executado -> saída
+let camadas = { regras: '', memoria: '', skills: {} }; // R48–R50, lidas da pasta no começo de cada pedido
+let registroRodada = null; // fatos da rodada para a memória (R50): pedido, arquitetura, time, portão, veredito
 let confirmando = null; // id da foto cujo Descartar espera o segundo clique
 
 function persistir() {
@@ -259,6 +261,13 @@ function marcarDecisao(id, mudanca) {
   conversas = conversas.map(mexer);
 }
 
+// R50: a memória longa recebe uma entrada por rodada, escrita pelo sistema (só fatos).
+async function anotarNaMemoria(registro, decisao) {
+  if (!registro || !ponte) return;
+  const r = await ponte.anotarMemoria({ pasta, entrada: n.entradaDeMemoria({ ...registro, decisao, em: Date.now() }) });
+  if (!r.ok) postar({ autor: 'sistema', texto: `Não anotei na memória: ${r.erro}`, erro: true });
+}
+
 // Manter apaga a foto; Descartar devolve a pasta ao que era antes do pedido.
 async function decidir(acao, { automatico = false } = {}) {
   const p = pendente;
@@ -267,9 +276,11 @@ async function decidir(acao, { automatico = false } = {}) {
     const r = await ponte.descartarFoto({ id: p.id, pasta });
     if (r.erro) { postar({ autor: 'sistema', texto: `Não deu para descartar: ${r.erro}`, erro: true }); return; }
     marcarDecisao(p.id, { estado: 'descartado', resultado: r });
+    await anotarNaMemoria(p.registro, 'descartado');
   } else {
     await ponte.manterFoto({ id: p.id });
     marcarDecisao(p.id, { estado: 'mantido', automatico });
+    await anotarNaMemoria(p.registro, automatico ? 'mantido sem decisão' : 'mantido');
   }
   pendente = null; confirmando = null;
   persistir(); desenharMensagens();
@@ -281,15 +292,18 @@ async function fecharRodada(foto, inicio) {
   const d = foto ? await ponte.diffFoto({ id: foto, pasta }) : null;
   if (!d || d.erro) {
     if (d?.erro) postar({ autor: 'sistema', texto: `Sem diff desta rodada: ${d.erro}`, erro: true });
-    postar({ autor: 'sistema', tipo: 'arquivos', arquivos: await ponte.arquivosAlterados({ pasta, desde: inicio }) });
+    const arquivos = await ponte.arquivosAlterados({ pasta, desde: inicio });
+    postar({ autor: 'sistema', tipo: 'arquivos', arquivos });
+    await anotarNaMemoria({ ...registroRodada, arquivos }, 'sem foto: mantido');
     return;
   }
   if (!n.totalDeMudancas(d)) {
     await ponte.manterFoto({ id: foto });
     postar({ autor: 'sistema', tipo: 'decisao', estado: 'nada' });
+    await anotarNaMemoria({ ...registroRodada, arquivos: [] }, 'nada mudou');
     return;
   }
-  pendente = { id: foto, conversa: atual.id };
+  pendente = { id: foto, conversa: atual.id, registro: { ...registroRodada, arquivos: d.diffs.map((x) => x.caminho) } };
   postar({ autor: 'sistema', tipo: 'decisao', foto, estado: 'pendente', ...d });
 }
 
@@ -336,7 +350,10 @@ function postar(msg) {
 async function executar(agente, pedido, anteriores, opcoes = {}) {
   mudarEstado(agente.id, 'trabalhando');
   const modo = provedores.modos[agente.provedor] ?? 'cli';
-  const prompt = n.montarPrompt(agente, pedido, anteriores, { modo, proximo: opcoes.proximo });
+  const prompt = n.montarPrompt(agente, pedido, anteriores, {
+    modo, proximo: opcoes.proximo, regras: camadas.regras, skill: camadas.skills?.[agente.id], memoria: n.recortarMemoria(camadas.memoria),
+  });
+  if (registroRodada && !registroRodada.time.includes(agente.nome)) registroRodada.time.push(agente.nome);
   const r = await ponte.executarAgente({ agente: agente.id, provedor: agente.provedor, modelo: agente.modelo, prompt, pasta, escrita: n.podeEscrever(agente), ferramentas: n.ferramentasDo(agente) });
   const erro = !r.ok || !r.saida;
   const texto = erro
@@ -381,6 +398,7 @@ async function executarComPortao(ids, pedido, anteriores, ciclo, extra = null, o
     const p = await portaoEmFila({ pasta, houveMudanca: alterados.length > 0 });
     el.hidden = true;
     const decisao = n.decidirPortao(p.situacao, rodada);
+    if (registroRodada) registroRodada.portao = p.situacao;
     ciclo.portoes = (ciclo.portoes ?? 0) + 1; // numeração da rodada inteira (o limite de devoluções é por chamada)
     postar({ autor: 'sistema', tipo: 'portao', ...p, rodada: ciclo.portoes, decisao, saida: undefined, detalhe: p.saida });
     if (p.situacao === 'bloqueado') {
@@ -393,6 +411,11 @@ async function executarComPortao(ids, pedido, anteriores, ciclo, extra = null, o
     if (decisao === 'desistir') {
       postar({ autor: 'sistema', texto: `O portão não aprovou depois de ${n.MAX_DEVOLUCOES} devoluções. O Revisor vai olhar mesmo assim, sabendo disso.`, erro: true });
       anteriores.push({ nome: 'Portão de testes', papel: 'testes automáticos', texto: `NÃO APROVADO depois de ${n.MAX_DEVOLUCOES} devoluções.\n${p.resumo || ''}` });
+      return p;
+    }
+    if (n.falhaEDeOutros(p.resumo, ciclo.autoria, executores)) {
+      // hierárquica: a falha cita só arquivos de outra frente; quem cuida é a frente dona deles
+      postar({ autor: 'sistema', texto: `A falha cita arquivos de outra frente; ${executores.map((id) => agentes.find((a) => a.id === id)?.nome).join(' e ')} segue.` });
       return p;
     }
     const falha = n.falhaDoPortao(p, rodada);
@@ -428,6 +451,7 @@ async function revisarComDevolucao(ids, pedido, anteriores, ciclo) {
     const vereditos = rs.map((r) => ({ id: r.id, texto: r.texto, ...n.lerVeredito(r.texto) }));
     vereditos.forEach((v) => anotarUltima(v.id, { veredito: v.veredito }));
     const devolvidos = vereditos.filter((v) => v.veredito === 'devolver');
+    if (registroRodada) registroRodada.veredito = devolvidos.length ? 'devolveu' : vereditos[0]?.veredito ?? '';
     const decisao = n.decidirRevisao(devolvidos.length ? 'devolver' : 'aprovado', rodada);
     if (decisao === 'seguir' || !ciclo.executores.length) return;
     if (decisao === 'desistir') {
@@ -464,7 +488,11 @@ async function rodarRede(plano, pedido, anteriores, ciclo, propostas) {
       marcarPasso(n.ehRevisor(ag) ? 'testes' : 'execucao');
       const r = await executar(ag, pedido, anteriores, opcoes);
       anteriores.push(r); texto = r.texto;
-      if (n.ehRevisor(ag)) anotarUltima(id, { veredito: n.lerVeredito(texto).veredito });
+      if (n.ehRevisor(ag)) {
+        const v = n.lerVeredito(texto).veredito;
+        anotarUltima(id, { veredito: v });
+        if (registroRodada) registroRodada.veredito = v;
+      }
     }
     const prox = n.escolherProximo({ texto, vizinhos, visitas, propostas, agentes });
     postar({ autor: 'sistema', texto: prox ? `${ag.nome} passou para ${agentes.find((a) => a.id === prox).nome}.` : `${ag.nome} encerrou a rede.` });
@@ -508,6 +536,8 @@ async function enviar(pedido) {
     provedores = await ponte.provedores(); // o .env pode ter mudado
     desenharPalco();
     if (pendente) await decidir('manter', { automatico: true }); // a foto nova já inclui o que ficou
+    camadas = await ponte.lerCamadas({ pasta });
+    registroRodada = { pedido, arquitetura: agentes.some((a) => a.id === destino) ? '' : arquitetura, time: [], portao: '', veredito: '' };
     const f = await ponte.tirarFoto({ pasta });
     if (f.erro) postar({ autor: 'sistema', texto: `Sem foto da pasta (${f.erro}): nesta rodada não vai dar para descartar.`, erro: true });
     else foto = f.id;
@@ -826,6 +856,35 @@ $('form-time').addEventListener('submit', (ev) => {
   ligacoes = rascunho.ligacoes;
   etapasConstrutor = rascunho.etapas.filter((e) => e.length);
   persistir(); desenhar();
+});
+
+// ---------- R48–R50: diálogo de instruções (regras do projeto, skills) e memória ----------
+let rascunhoCamadas = null;
+
+$('btn-camadas').addEventListener('click', async () => {
+  if (ocupado || !ponte) return;
+  const c = await ponte.lerCamadas({ pasta });
+  rascunhoCamadas = { ...c, skills: { ...c.skills }, mudadas: new Set() };
+  $('camadas-regras').value = c.regras;
+  $('camadas-memoria').value = c.memoria;
+  $('camadas-agente').innerHTML = agentes.filter((a) => !a.coordenador).map((a) => `<option value="${a.id}">${esc(a.nome)} (${esc(a.papel)})</option>`).join('');
+  $('camadas-skill').value = c.skills[$('camadas-agente').value] ?? '';
+  $('camadas-onde').textContent = `Arquivos em ${pasta || pastaPadrao}/.estudio/ (fora da foto, do diff e do portão).`;
+  $('camadas-resultado').textContent = '';
+  $('dlg-camadas').showModal();
+});
+$('camadas-agente').addEventListener('change', (ev) => { $('camadas-skill').value = rascunhoCamadas.skills[ev.target.value] ?? ''; });
+$('camadas-skill').addEventListener('input', (ev) => {
+  const id = $('camadas-agente').value;
+  rascunhoCamadas.skills[id] = ev.target.value; rascunhoCamadas.mudadas.add(id);
+});
+$('form-camadas').addEventListener('submit', async (ev) => {
+  if (ev.submitter?.value !== 'salvar') return;
+  ev.preventDefault();
+  const skills = Object.fromEntries([...rascunhoCamadas.mudadas].map((id) => [id, rascunhoCamadas.skills[id]]));
+  const r = await ponte.salvarCamadas({ pasta, regras: $('camadas-regras').value, memoria: $('camadas-memoria').value, skills });
+  if (!r.ok) { $('camadas-resultado').textContent = r.erro; return; }
+  $('dlg-camadas').close();
 });
 
 // ---------- cartão do agente: provedor e modelo (R23) ----------
