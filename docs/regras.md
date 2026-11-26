@@ -1,6 +1,6 @@
 # Regras do Estúdio
 
-Origem: texto do post (Fernando Nogueira, LinkedIn) e o print do slide da atividade.
+Origem: texto do post (Fernando Nogueira, LinkedIn), o print do slide da atividade e a Aula 16 (Do agente ao time). Cada regra tem teste em `test/`.
 
 | # | Regra | Entrada → saída | Origem |
 |---|---|---|---|

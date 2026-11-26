@@ -185,7 +185,7 @@ Abra o app pelo terminal (`npm start`). Assim ele herda o `PATH` onde as CLIs fo
   3. Cada agente entrega e passa o resultado para o próximo.
   
   A rodada e a montagem do time são **regras do app** (palavras-chave de cada papel, ver
-  `REGRAS.md`): não gastam chamada de IA.
+  `docs/regras.md`): não gastam chamada de IA.
 - **Falar com um agente só:** clique no mascote ou no chip acima da caixa de texto.
 - **Comandos sugeridos** em blocos ```bash viram o botão **Executar**, que roda na pasta do projeto
   com limite de 60 s. Os sensíveis (`rm -rf`, `sudo`, `git push`, `curl | sh`, `DROP TABLE`…)
@@ -199,7 +199,7 @@ Abra o app pelo terminal (`npm start`). Assim ele herda o `PATH` onde as CLIs fo
 
 | Arquivo | Papel |
 |---|---|
-| `REGRAS.md` | As regras R1–R38, com entrada, saída e origem. |
+| `docs/regras.md` | As regras R1–R38, com entrada, saída e origem. |
 | `.env.example` | Modelo do `.env`: modo gratuito, chaves e modelos de cada IA. |
 | `src/nucleo.mjs` | **Todas as regras.** Funções puras, sem DOM, Electron nem rede. |
 | `src/renderer.mjs` | Tela: mascotes em SVG, palco, rodada de propostas, chat. |
