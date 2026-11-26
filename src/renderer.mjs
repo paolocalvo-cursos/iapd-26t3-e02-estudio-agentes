@@ -80,6 +80,7 @@ function mascote(a) {
     <rect x="57" y="88" width="9" height="14" rx="2" fill="${s}"/><rect x="72" y="88" width="9" height="14" rx="2" fill="${s}"/></svg>`;
 }
 
+const ROTULO_VEREDITO = { aprovado: '✓ aprovou', devolver: '↩ devolveu', 'sem-veredito': 'sem veredito' };
 const ROTULO_ESTADO = { disponivel: 'Disponível', pensando: 'Pensando', trabalhando: 'Trabalhando', concluido: 'Concluído' };
 
 // ---------- desenho ----------
@@ -182,7 +183,7 @@ function desenharMensagens() {
     }
     const a = m.autor === 'sistema' ? { nome: 'Estúdio', cor: '#777' } : ag(m.autor);
     return `<div class="msg ${m.erro ? 'falhou' : ''}" style="--cor:${a.cor}"><span class="avatar"></span><div>
-      <div class="cab">${esc(a.nome)}<small>${hora(m.em)}</small>${m.erro ? '<span class="selo">falhou</span>' : ''}${m.gratis && !m.erro ? `<span class="selo gratis" title="${esc(m.modelo ?? '')}">Gemini grátis</span>` : ''}</div>
+      <div class="cab">${esc(a.nome)}<small>${hora(m.em)}</small>${m.erro ? '<span class="selo">falhou</span>' : ''}${m.veredito ? `<span class="selo veredito-${m.veredito}">${ROTULO_VEREDITO[m.veredito]}</span>` : ''}${m.gratis && !m.erro ? `<span class="selo gratis" title="${esc(m.modelo ?? '')}">Gemini grátis</span>` : ''}</div>
       <div class="corpo">${formatar(m.texto)}</div>
       ${m.time ? `<div class="etiquetas">${m.time.map((id) => `<span style="--cor:${ag(id).cor}">${esc(ag(id).nome)}</span>`).join('')}</div>` : ''}
       ${desenharComandos(m.texto)}</div></div>`;
@@ -330,23 +331,25 @@ const ROTULO_PORTAO = {
   'sem-isolamento': '⚠ não rodou: sem caixa de areia',
 };
 
-// Roda a etapa de execução e, enquanto o portão reprovar, devolve o trabalho para quem fez.
-async function executarComPortao(etapa, pedido, anteriores) {
-  const inicio = Date.now() - 1000;
-  const autoria = {};
-  const anotar = (rs) => rs.forEach((r) => r.gravados.forEach((c) => { autoria[c] = r.id; }));
-  const executores = etapa.filter((id) => n.podeEscrever(agentes.find((a) => a.id === id)));
-  let resultados = await Promise.all(etapa.map((id) => executar(agentes.find((a) => a.id === id), pedido, anteriores)));
+// Roda `ids` e, enquanto o portão reprovar, devolve o trabalho para quem fez.
+// `ciclo` vale a rodada inteira: autoria dos arquivos, quem executa e o início (para "o que mudou").
+// `extra` é o recado que só esta chamada recebe (ex.: a devolução do Revisor).
+async function executarComPortao(ids, pedido, anteriores, ciclo, extra = null) {
+  const anotar = (rs) => rs.forEach((r) => r.gravados.forEach((c) => { ciclo.autoria[c] = r.id; }));
+  const executores = ids.filter((id) => n.podeEscrever(agentes.find((a) => a.id === id)));
+  ciclo.executores = [...new Set([...ciclo.executores, ...executores])];
+  let resultados = await Promise.all(ids.map((id) => executar(agentes.find((a) => a.id === id), pedido, extra ? [...anteriores, extra] : anteriores)));
   anteriores.push(...resultados); anotar(resultados);
   if (!executores.length) return null;
   for (let rodada = 1; ; rodada++) {
     marcarPasso('testes');
-    const alterados = await ponte.arquivosAlterados({ pasta, desde: inicio });
+    const alterados = await ponte.arquivosAlterados({ pasta, desde: ciclo.inicio });
     const el = $('trabalhando'); el.hidden = false; el.textContent = 'Portão de testes rodando…';
     const p = await ponte.portao({ pasta, houveMudanca: alterados.length > 0 });
     el.hidden = true;
     const decisao = n.decidirPortao(p.situacao, rodada);
-    postar({ autor: 'sistema', tipo: 'portao', ...p, rodada, decisao, saida: undefined, detalhe: p.saida });
+    ciclo.portoes = (ciclo.portoes ?? 0) + 1; // numeração da rodada inteira (o limite de devoluções é por chamada)
+    postar({ autor: 'sistema', tipo: 'portao', ...p, rodada: ciclo.portoes, decisao, saida: undefined, detalhe: p.saida });
     if (p.situacao === 'bloqueado') {
       postar({ autor: 'sistema', texto: `O "test" do package.json parece perigoso e não rodou sozinho:\n\`${p.script}\`\nLeia antes de aprovar:\n\`\`\`bash\n${p.comando}\n\`\`\`` });
     }
@@ -360,13 +363,49 @@ async function executarComPortao(etapa, pedido, anteriores) {
       return p;
     }
     const falha = n.falhaDoPortao(p, rodada);
-    const corretores = n.quemCorrige(p.resumo, autoria, executores);
-    const nomes = corretores.map((id) => agentes.find((a) => a.id === id)?.nome).join(' e ');
-    const maestro = agentes.find((a) => a.coordenador);
-    if (maestro) { postar({ autor: maestro.id, texto: `Voltou para ${nomes}: ${ROTULO_PORTAO[p.situacao]}.` }); falar(maestro.id, `Voltou para ${nomes}.`); }
+    const corretores = n.quemCorrige(p.resumo, ciclo.autoria, ciclo.executores);
+    avisarDevolucao(corretores, ROTULO_PORTAO[p.situacao]);
     marcarPasso('execucao');
     resultados = await Promise.all(corretores.map((id) => executar(agentes.find((a) => a.id === id), pedido, [...anteriores, falha])));
     anteriores.push(...resultados); anotar(resultados);
+  }
+}
+
+function avisarDevolucao(corretores, motivo) {
+  const nomes = corretores.map((id) => agentes.find((a) => a.id === id)?.nome).join(' e ');
+  const maestro = agentes.find((a) => a.coordenador);
+  if (maestro) { postar({ autor: maestro.id, texto: `Voltou para ${nomes}: ${motivo}.` }); falar(maestro.id, `Voltou para ${nomes}.`); }
+}
+
+// Marca o veredito na última mensagem do agente (selo "aprovou" / "devolveu" no chat).
+function anotarUltima(id, extra) {
+  const i = atual.mensagens.findLastIndex((m) => m.autor === id);
+  if (i < 0) return;
+  atual = { ...atual, mensagens: atual.mensagens.map((m, j) => (j === i ? { ...m, ...extra } : m)) };
+  persistir(); desenharMensagens();
+}
+
+// R36–R38: o Revisor lê tudo e dá o veredito. DEVOLVER manda os achados para quem escreveu os arquivos citados;
+// a correção passa de novo pelo portão e volta para o Revisor, até MAX_REVISOES devoluções.
+async function revisarComDevolucao(ids, pedido, anteriores, ciclo) {
+  for (let rodada = 1; ; rodada++) {
+    marcarPasso('testes');
+    const rs = await Promise.all(ids.map((id) => executar(agentes.find((a) => a.id === id), pedido, anteriores)));
+    anteriores.push(...rs);
+    const vereditos = rs.map((r) => ({ id: r.id, texto: r.texto, ...n.lerVeredito(r.texto) }));
+    vereditos.forEach((v) => anotarUltima(v.id, { veredito: v.veredito }));
+    const devolvidos = vereditos.filter((v) => v.veredito === 'devolver');
+    const decisao = n.decidirRevisao(devolvidos.length ? 'devolver' : 'aprovado', rodada);
+    if (decisao === 'seguir' || !ciclo.executores.length) return;
+    if (decisao === 'desistir') {
+      postar({ autor: 'sistema', texto: `O Revisor ainda devolveu depois de ${n.MAX_REVISOES} correções. Fica para você decidir no passo 5.`, erro: true });
+      return;
+    }
+    const v = { achados: devolvidos.flatMap((d) => d.achados), texto: devolvidos.map((d) => d.texto).join('\n\n') };
+    const corretores = n.quemCorrige(v.achados.join('\n') || v.texto, ciclo.autoria, ciclo.executores);
+    avisarDevolucao(corretores, 'o Revisor devolveu');
+    marcarPasso('execucao');
+    await executarComPortao(corretores, pedido, anteriores, ciclo, n.falhaDaRevisao(v, rodada));
   }
 }
 
@@ -404,11 +443,13 @@ async function enviar(pedido) {
       const { etapas, mensagem } = n.montarTime(agentes, propostas);
       if (maestro) { postar({ autor: maestro.id, texto: mensagem, time: etapas.flat() }); falar(maestro.id, mensagem); }
       const anteriores = [];
+      const ciclo = { inicio, autoria: {}, executores: [] };
       for (const etapa of etapas) {
         const executa = etapa.some((id) => n.podeEscrever(agentes.find((a) => a.id === id)));
-        const revisa = etapa.every((id) => agentes.find((a) => a.id === id)?.papel === 'Revisão de código');
+        const revisa = etapa.every((id) => n.ehRevisor(agentes.find((a) => a.id === id)));
         marcarPasso(revisa ? 'testes' : 'execucao'); // o revisor confere: é verificação, não execução
-        if (executa) { await executarComPortao(etapa, pedido, anteriores); continue; }
+        if (executa) { await executarComPortao(etapa, pedido, anteriores, ciclo); continue; }
+        if (revisa) { await revisarComDevolucao(etapa, pedido, anteriores, ciclo); continue; }
         const resultados = await Promise.all(etapa.map((id) => executar(agentes.find((a) => a.id === id), pedido, anteriores)));
         anteriores.push(...resultados);
       }

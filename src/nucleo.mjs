@@ -199,6 +199,7 @@ export function montarPrompt(agente, pedido, anteriores = [], { modo = 'cli' } =
     pasta,
     'Responda em português do Brasil. Fora dos arquivos, seja curto (até 15 linhas) e fale só da sua parte.',
     'Se sugerir comandos de terminal, coloque-os num bloco ```bash.',
+    ...(ehRevisor(agente) ? [INSTRUCAO_VEREDITO] : []),
     `\nPedido do usuário: ${pedido}${contexto}`,
   ].join('\n');
 }
@@ -628,4 +629,43 @@ export function planoDeDescarte({ criados = [], alterados = [], removidos = [] }
 
 export function idDeFotoValido(id) {
   return /^[a-z0-9-]{1,64}$/.test(String(id ?? ''));
+}
+
+// ---------- R36–R38: o Revisor que devolve ----------
+// Quem revisa não é quem escreveu (Aula 16): o Revisor termina com um veredito. DEVOLVER manda os achados
+// de volta para quem escreveu os arquivos citados; depois da correção, o portão roda de novo e o Revisor relê.
+export const MAX_REVISOES = 2;
+
+export const INSTRUCAO_VEREDITO = 'Termine com uma linha "VEREDITO: APROVADO" ou "VEREDITO: DEVOLVER". '
+  + 'Se devolver, liste embaixo cada problema numa linha começando com "- " e citando o arquivo (ex.: "- server.js: 404 sem corpo"). '
+  + 'Devolva só o que impede a entrega; o resto é observação e não volta.';
+
+export function ehRevisor(agente) {
+  return agente?.papel === 'Revisão de código';
+}
+
+export function lerVeredito(texto) {
+  const linhas = String(texto ?? '').split('\n');
+  let onde = -1; let veredito = 'sem-veredito';
+  linhas.forEach((l, i) => {
+    const m = normalizar(l).replace(/[*_`]/g, '').match(/veredito\s*:\s*(aprovad|devolv)/);
+    if (m) { onde = i; veredito = m[1] === 'aprovad' ? 'aprovado' : 'devolver'; }
+  });
+  const achados = veredito !== 'devolver' ? [] : linhas.slice(onde + 1)
+    .map((l) => l.trim()).filter((l) => /^[-*]\s+/.test(l)).map((l) => l.replace(/^[-*]\s+/, ''));
+  return { veredito, achados };
+}
+
+export function decidirRevisao(veredito, rodada, max = MAX_REVISOES) {
+  if (veredito !== 'devolver') return 'seguir';
+  return rodada <= max ? 'devolver' : 'desistir';
+}
+
+export function falhaDaRevisao({ achados = [], texto = '' }, rodada, max = MAX_REVISOES) {
+  const lista = achados.length ? achados.map((a) => `- ${a}`).join('\n') : texto.trim();
+  return {
+    nome: 'Revisor', papel: 'revisão de código',
+    texto: `Revisão ${rodada} de ${max + 1}. O Revisor devolveu o trabalho. Corrija só o que ele apontou na sua parte; `
+      + `não apague nem enfraqueça testes. Depois da correção, o portão de testes roda de novo.\nAchados:\n${lista}`,
+  };
 }

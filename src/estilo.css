@@ -198,3 +198,8 @@ dialog .nota { font-size: 11.5px; color: var(--apagado); margin: 0 0 10px; line-
 .decisao.descartado { opacity: .75; }
 .decisao > .pasta { border: 0; background: none; padding: 3px 0; color: var(--apagado); font-size: 12px; cursor: pointer; }
 .decisao > .pasta:hover { color: var(--amarelo); }
+
+/* R36: selo do veredito do Revisor */
+.selo.veredito-aprovado { background: #1f3a2a; color: #9be0b4; }
+.selo.veredito-devolver { background: #4a3a1a; color: #f0cf8a; }
+.selo.veredito-sem-veredito { background: #2a2825; color: var(--apagado); }

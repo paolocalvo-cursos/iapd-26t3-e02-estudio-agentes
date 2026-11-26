@@ -42,6 +42,8 @@ const PAGINA = `<!doctype html>
 </script>
 </html>`;
 
+const PAGINA_CORRIGIDA = PAGINA.replace("fetch('/health')", "fetch('/health', { signal: AbortSignal.timeout(3000) })");
+
 const bloco = (caminho, conteudo) => '```arquivo:' + caminho + '\n' + conteudo + '\n```';
 
 // Falas por agente do time padrão; agente criado na tela cai no genérico, pelo papel.
@@ -61,13 +63,21 @@ const FALAS = {
       texto: `O portão tem razão: eu mandava \`text/plain\`. Corrigido para \`application/json\`; o teste ficou como estava.\n\n${bloco('server.js', SERVIDOR_CORRIGIDO)}`,
       arquivos: { 'server.js': SERVIDOR_CORRIGIDO },
     }),
-  pixel: () => ({
-    texto: `Página em \`public/index.html\`: lê o /health e mostra o estado num \`role="status"\`, que o leitor de tela anuncia.\n\n${bloco('public/index.html', PAGINA)}`,
-    arquivos: { 'public/index.html': PAGINA },
-  }),
-  revisor: () => ({
-    texto: 'Li o diff e a saída do portão. A primeira versão mandava JSON com `text/plain`; o portão pegou e o Chevron corrigiu sem mexer no teste. '
-      + 'Ainda falta: a página não trata resposta lenta (sem tempo limite no fetch). Não bloqueia. **Aprovo.**',
+  pixel: (vez) => (vez === 1
+    ? {
+      texto: `Página em \`public/index.html\`: lê o /health e mostra o estado num \`role="status"\`, que o leitor de tela anuncia.\n\n${bloco('public/index.html', PAGINA)}`,
+      arquivos: { 'public/index.html': PAGINA },
+    }
+    : {
+      texto: `Justo. O fetch agora desiste em 3 s e a página mostra "fora do ar" em vez de ficar em "consultando…".\n\n${bloco('public/index.html', PAGINA_CORRIGIDA)}`,
+      arquivos: { 'public/index.html': PAGINA_CORRIGIDA },
+    }),
+  revisor: (vez) => ({
+    texto: vez === 1
+      ? 'Li o diff e a saída do portão. O `text/plain` o portão já pegou e o Chevron corrigiu sem mexer no teste. '
+        + 'Mas a página fica presa em "consultando…" se o servidor travar.\n\nVEREDITO: DEVOLVER\n'
+        + '- public/index.html: o fetch do /health não tem tempo limite; servidor travado deixa a tela em "consultando…" para sempre'
+      : 'Reli: o fetch desiste em 3 s e cai no "fora do ar". O teste do /health continua igual.\n\nVEREDITO: APROVADO',
   }),
 };
 
