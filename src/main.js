@@ -87,16 +87,13 @@ function existe(cmd) {
 
 // Quem executa escreve na pasta do projeto; pesquisa e revisão só leem.
 // `modelo` só é passado quando o agente tem um modelo próprio (R23).
+// As permissões vêm da lista de ferramentas do agente (R46, permissoesCli no núcleo).
 const COMANDOS = {
-  claude: (prompt, escrita, modelo) => ['claude', ['-p', prompt, '--output-format', 'text',
-    '--allowedTools', escrita ? 'Read,Grep,Glob,Edit,MultiEdit,Write' : 'Read,Grep,Glob',
-    ...(escrita ? ['--permission-mode', 'acceptEdits'] : []), ...(modelo ? ['--model', modelo] : [])]],
+  claude: (prompt, perm, modelo) => ['claude', ['-p', prompt, '--output-format', 'text', ...perm, ...(modelo ? ['--model', modelo] : [])]],
   // --skip-trust: em modo -p o gemini recusa pasta "não confiável"; a pasta é a que a pessoa escolheu.
-  gemini: (prompt, escrita, modelo) => ['gemini', ['--skip-trust', '--approval-mode', escrita ? 'auto_edit' : 'plan', '-o', 'text',
-    ...(modelo ? ['-m', modelo] : []), '-p', prompt]],
+  gemini: (prompt, perm, modelo) => ['gemini', ['--skip-trust', ...perm, '-o', 'text', ...(modelo ? ['-m', modelo] : []), '-p', prompt]],
   // --skip-git-repo-check: sem ele o codex recusa pastas fora de um repositório git confiável.
-  codex: (prompt, escrita, modelo) => ['codex', ['exec', '--sandbox', escrita ? 'workspace-write' : 'read-only', '--skip-git-repo-check',
-    ...(modelo ? ['-m', modelo] : []), prompt]],
+  codex: (prompt, perm, modelo) => ['codex', ['exec', ...perm, '--skip-git-repo-check', ...(modelo ? ['-m', modelo] : []), prompt]],
 };
 
 const COMO_INSTALAR = {
@@ -267,8 +264,11 @@ function pastaDoProjeto(pasta) {
   return p;
 }
 
-ipcMain.handle('executar-agente', async (_ev, { provedor, modelo: modeloDoAgente, prompt, pasta, escrita }) => {
-  const { CATALOGO, validarModelo } = await nucleo;
+ipcMain.handle('executar-agente', async (_ev, { provedor, modelo: modeloDoAgente, prompt, pasta, escrita, ferramentas }) => {
+  const { CATALOGO, validarModelo, FERRAMENTAS, permissoesCli } = await nucleo;
+  // Sem lista (chamada antiga ou "Testar agente"), vale a escrita: ler, e escrever se pedida.
+  const lista = Array.isArray(ferramentas) ? ferramentas.filter((f) => f in FERRAMENTAS) : ['ler', ...(escrita ? ['escrever'] : [])];
+  escrita = lista.includes('escrever');
   const info = CATALOGO[provedor];
   if (!info) return { ok: false, erro: `Provedor desconhecido: ${provedor}` };
   let proprio;
@@ -290,7 +290,7 @@ ipcMain.handle('executar-agente', async (_ev, { provedor, modelo: modeloDoAgente
     return { ...r, modo };
   }
   if (modo === 'cli') {
-    const [cmd, args] = COMANDOS[provedor](String(prompt), Boolean(escrita), proprio);
+    const [cmd, args] = COMANDOS[provedor](String(prompt), permissoesCli(provedor, lista), proprio);
     return { ...(await rodar(cmd, args, raiz, env)), modo, modelo: proprio || 'padrão da CLI' };
   }
   if (estado.gratuito) {

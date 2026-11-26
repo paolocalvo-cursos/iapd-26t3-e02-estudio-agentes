@@ -65,6 +65,7 @@
         <label>Cor <input type="color" name="cor" value="#5fb3a1"></label>
       </div>
       <label>Modelo (vazio = padrão do provedor) <input name="modelo" placeholder="padrão" maxlength="80"></label>
+      <fieldset class="ferramentas-form"><legend>Ferramentas (a lista é a permissão)</legend><label><input type="checkbox" name="ferramenta" value="ler" checked> 📖 Ler</label><label><input type="checkbox" name="ferramenta" value="escrever" checked> ✏️ Escrever</label><label><input type="checkbox" name="ferramenta" value="executar"> ▶ Executar</label><label><input type="checkbox" name="ferramenta" value="rede"> 🌐 Conectar</label></fieldset>
       <p id="erro-agente" class="erro"></p>
       <menu><button value="cancelar" formnovalidate>Cancelar</button><button value="criar" class="primario">Criar</button></menu>
     </form>
@@ -104,6 +105,7 @@
       <p class="nota" id="editar-papel"></p>
       <label>Provedor <select name="provedor" class="sel-provedor"></select></label>
       <label>Modelo (vazio = padrão do provedor) <input name="modelo" maxlength="80"></label>
+      <fieldset class="ferramentas-form" id="editar-ferramentas"><legend>Ferramentas (a lista é a permissão)</legend><label><input type="checkbox" name="ferramenta" value="ler"> 📖 Ler</label><label><input type="checkbox" name="ferramenta" value="escrever"> ✏️ Escrever</label><label><input type="checkbox" name="ferramenta" value="executar"> ▶ Executar</label><label><input type="checkbox" name="ferramenta" value="rede"> 🌐 Conectar</label></fieldset>
       <p class="nota" id="editar-acesso"></p>
       <p id="editar-resultado" class="resultado"></p>
       <menu>

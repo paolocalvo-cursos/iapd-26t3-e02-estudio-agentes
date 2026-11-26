@@ -199,6 +199,7 @@ export function montarPrompt(agente, pedido, anteriores = [], { modo = 'cli', pr
     pasta,
     'Responda em português do Brasil. Fora dos arquivos, seja curto (até 15 linhas) e fale só da sua parte.',
     'Se sugerir comandos de terminal, coloque-os num bloco ```bash.',
+    instrucaoFerramentas(agente),
     ...(ehRevisor(agente) ? [INSTRUCAO_VEREDITO] : []),
     ...(proximo?.length ? [instrucaoProximo(proximo)] : []),
     `\nPedido do usuário: ${pedido}${contexto}`,
@@ -231,6 +232,7 @@ export function criarAgente(agentes, dados) {
   const modelo = validarModelo(dados.modelo);
   const novo = { id, nome, papel, provedor, forma, cor, palavras, personalidade: String(dados.personalidade ?? '').trim() };
   if (modelo) novo.modelo = modelo;
+  if (Array.isArray(dados.ferramentas)) novo.ferramentas = validarFerramentas(dados.ferramentas, novo);
   return [...agentes, novo];
 }
 
@@ -258,8 +260,9 @@ function encurtar(texto, max) {
 // ---------- R13: quem pode escrever na pasta do projeto ----------
 // Quem executa (front, back, agentes criados) edita os arquivos direto na pasta.
 // Coordenador, pesquisa e revisão só leem.
+// R44: a lista de ferramentas é a permissão (antes, R13 decidia pelo papel; o padrão continua o mesmo).
 export function podeEscrever(agente) {
-  return !agente.coordenador && agente.papel !== 'Pesquisa' && agente.papel !== 'Revisão de código';
+  return ferramentasDo(agente).includes('escrever');
 }
 
 // ---------- R14: arquivos que a rodada criou ou alterou ----------
@@ -393,9 +396,11 @@ export function editarAgente(agentes, id, dados) {
   const provedor = dados.provedor ?? alvo.provedor;
   if (!PROVEDORES.includes(provedor)) throw new Error(`Provedor desconhecido: ${provedor}`);
   const modelo = validarModelo(dados.modelo ?? alvo.modelo);
+  const ferramentas = Array.isArray(dados.ferramentas) ? validarFerramentas(dados.ferramentas, alvo) : alvo.ferramentas;
   return agentes.map((a) => {
     if (a.id !== id) return a;
     const novo = { ...a, provedor };
+    if (ferramentas) novo.ferramentas = ferramentas;
     if (modelo) novo.modelo = modelo; else delete novo.modelo;
     return novo;
   });
@@ -801,4 +806,66 @@ export function sugerirArquitetura(pedido, agentes) {
   else if (areas.size >= 2 && (palavras.length > 30 || casa(SINAIS_GRANDE))) id = 'hierarquica';
   else if (areas.size >= 2) id = 'supervisor';
   return { id, motivo: ARQUITETURAS[id].quando };
+}
+
+// ---------- R44–R47: ferramentas por agente (Aula 16: "a lista é a permissão") ----------
+export const FERRAMENTAS = Object.freeze({
+  ler: { rotulo: 'Ler', icone: '📖', descricao: 'Arquivos, páginas, logs' },
+  escrever: { rotulo: 'Escrever', icone: '✏️', descricao: 'Criar e editar arquivos' },
+  executar: { rotulo: 'Executar', icone: '▶', descricao: 'Comandos e testes' },
+  rede: { rotulo: 'Conectar', icone: '🌐', descricao: 'Rede: páginas e APIs' },
+});
+const ORDEM_FERRAMENTAS = Object.keys(FERRAMENTAS);
+
+// O líder não tem ferramentas; o Revisor só lê; a pesquisa lê e conecta; quem executa lê e escreve.
+// "Executar" fica desligado por padrão: quem roda os testes é o portão (o juiz fica de fora).
+export function ferramentasPadrao(agente) {
+  if (agente.coordenador) return [];
+  if (ehRevisor(agente)) return ['ler'];
+  if (agente.papel === 'Pesquisa') return ['ler', 'rede'];
+  return ['ler', 'escrever'];
+}
+
+export function ferramentasDo(agente) {
+  if (!agente || agente.coordenador) return [];
+  return agente.ferramentas ?? ferramentasPadrao(agente);
+}
+
+export function validarFerramentas(lista, agente) {
+  const unicas = [...new Set(lista)];
+  const estranha = unicas.find((f) => !ORDEM_FERRAMENTAS.includes(f));
+  if (estranha) throw new Error(`Ferramenta desconhecida: ${estranha}`);
+  if (agente?.coordenador && unicas.length) throw new Error('O líder não tem ferramentas: só planeja, distribui e acompanha.');
+  if (unicas.includes('escrever') && unicas.includes('rede')) {
+    throw new Error('Quem escreve não acessa a rede (Aula 16): tire Escrever ou Conectar.');
+  }
+  return ORDEM_FERRAMENTAS.filter((f) => unicas.includes(f));
+}
+
+// R46: a lista vira as flags de cada CLI. Pela API, só "escrever" tem efeito (grava os blocos ```arquivo).
+const FERRAMENTAS_CLAUDE = { ler: ['Read', 'Grep', 'Glob'], escrever: ['Edit', 'MultiEdit', 'Write'], executar: ['Bash'], rede: ['WebFetch', 'WebSearch'] };
+
+export function permissoesCli(provedor, ferramentas) {
+  const tem = (f) => ferramentas.includes(f);
+  if (provedor === 'claude') {
+    const liberadas = ORDEM_FERRAMENTAS.filter(tem).flatMap((f) => FERRAMENTAS_CLAUDE[f]);
+    const negadas = ORDEM_FERRAMENTAS.filter((f) => !tem(f)).flatMap((f) => FERRAMENTAS_CLAUDE[f]);
+    return ['--allowedTools', liberadas.join(','), '--disallowedTools', negadas.join(','),
+      ...(tem('escrever') ? ['--permission-mode', 'acceptEdits'] : [])];
+  }
+  if (provedor === 'gemini') return ['--approval-mode', tem('executar') ? 'yolo' : tem('escrever') ? 'auto_edit' : 'plan'];
+  if (provedor === 'codex') {
+    const escreve = tem('escrever') || tem('executar');
+    return ['--sandbox', escreve ? 'workspace-write' : 'read-only',
+      ...(escreve && tem('rede') ? ['-c', 'sandbox_workspace_write.network_access=true'] : [])];
+  }
+  return [];
+}
+
+export function instrucaoFerramentas(agente) {
+  const tem = ferramentasDo(agente);
+  if (!tem.length) return 'Você não tem ferramentas: só planeja e conversa.';
+  const nomes = (fs) => fs.map((f) => FERRAMENTAS[f].rotulo).join(', ');
+  const faltam = ORDEM_FERRAMENTAS.filter((f) => !tem.includes(f));
+  return `Suas ferramentas: ${nomes(tem)}.${faltam.length ? ` Sem permissão para: ${nomes(faltam)} (não tente usá-las).` : ''}`;
 }

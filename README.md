@@ -42,6 +42,19 @@ criado (`+`), alterado (`~`) ou removido (`−`), com o diff. A partir daí voc�
 O descarte não mexe em `node_modules`, `.git`, `dist` e nas outras pastas ignoradas, nem em arquivos com mais de 2 MB,
 que o card avisa. Mandar um pedido novo sem decidir mantém a rodada anterior. Regras R32 a R35.
 
+## Ferramentas: a lista é a permissão
+
+Cada agente mostra no cartão as ferramentas que pode usar: 📖 Ler, ✏️ Escrever, ▶ Executar e 🌐 Conectar. Para mudar,
+dê um duplo clique no agente. Os padrões seguem a Aula 16:
+
+- o líder não tem ferramentas;
+- o Revisor só lê;
+- a pesquisa lê e conecta;
+- quem executa lê e escreve.
+
+Quem escreve não pode acessar a rede, e o Estúdio recusa essa combinação. A lista vira as flags de cada CLI (R46).
+Limite conhecido: pela API, os agentes não têm ferramentas próprias, e só Escrever tem efeito (grava os arquivos).
+
 ## Chaves e provedores (botão 🔑)
 
 - **Colar a chave pela tela:** o botão 🔑 lista os provedores (Anthropic, Gemini, OpenAI, Groq, OpenRouter e Ollama).
@@ -199,7 +212,7 @@ Abra o app pelo terminal (`npm start`). Assim ele herda o `PATH` onde as CLIs fo
 
 | Arquivo | Papel |
 |---|---|
-| `docs/regras.md` | As regras R1–R38, com entrada, saída e origem. |
+| `docs/regras.md` | As regras R1–R47, com entrada, saída e origem. |
 | `.env.example` | Modelo do `.env`: modo gratuito, chaves e modelos de cada IA. |
 | `src/nucleo.mjs` | **Todas as regras.** Funções puras, sem DOM, Electron nem rede. |
 | `src/renderer.mjs` | Tela: mascotes em SVG, palco, rodada de propostas, chat. |
@@ -210,6 +223,8 @@ Abra o app pelo terminal (`npm start`). Assim ele herda o `PATH` onde as CLIs fo
 | `test/roteiro.test.mjs` | Testes do roteiro falso: time da Demo 1, falha, devolução, aprovação e descarte. |
 | `test/decisao.test.mjs` | Testes da foto, do diff e do plano de descarte (Manter/Descartar). |
 | `test/revisor.test.mjs` | Testes do veredito do Revisor e da devolução. |
+| `test/arquiteturas.test.mjs` | Testes dos 8 modelos de time, da rede e da sugestão "qual usar". |
+| `test/ferramentas.test.mjs` | Testes das ferramentas por agente e das flags de cada CLI. |
 
 ## Fora do escopo (citado no post)
 

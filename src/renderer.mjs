@@ -86,6 +86,13 @@ function mascote(a) {
     <rect x="57" y="88" width="9" height="14" rx="2" fill="${s}"/><rect x="72" y="88" width="9" height="14" rx="2" fill="${s}"/></svg>`;
 }
 
+// R44: ícones e texto das ferramentas de cada agente.
+function textoFerramentas(a) {
+  const tem = n.ferramentasDo(a);
+  if (!tem.length) return a.coordenador ? 'Sem ferramentas: o líder só planeja e distribui' : 'Sem ferramentas: só conversa';
+  return `Ferramentas: ${tem.map((f) => n.FERRAMENTAS[f].rotulo).join(', ')}`;
+}
+
 const ROTULO_VEREDITO = { aprovado: '✓ aprovou', devolver: '↩ devolveu', 'sem-veredito': 'sem veredito' };
 const ROTULO_ESTADO = { disponivel: 'Disponível', pensando: 'Pensando', trabalhando: 'Trabalhando', concluido: 'Concluído' };
 
@@ -96,6 +103,7 @@ function desenharPalco() {
       ${baloes.has(a.id) ? `<div class="balao">${esc(baloes.get(a.id))}</div>` : ''}
       ${mascote(a)}
       <span class="nome">${esc(a.nome)}</span><span class="papel">${esc(a.papel)}</span>
+      <span class="ferramentas" title="${esc(textoFerramentas(a))}">${n.ferramentasDo(a).map((f) => n.FERRAMENTAS[f].icone).join(' ') || '—'}</span>
       <span class="estado">${ROTULO_ESTADO[estados[a.id] ?? 'disponivel']}</span>
     </button>`).join('');
   $('status').textContent = n.resumoStatus(agentes, estados);
@@ -144,9 +152,14 @@ function formatar(texto) {
     .replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>');
 }
 
-function desenharComandos(texto) {
+function desenharComandos(texto, autor) {
   const cmds = n.extrairComandos(texto);
   if (!cmds.length) return '';
+  const quem = agentes.find((a) => a.id === autor);
+  if (quem && !n.ferramentasDo(quem).includes('executar')) {
+    // R44: sem a ferramenta Executar, o comando sugerido aparece, mas não roda pela tela
+    return `<div class="comandos">${cmds.map(({ comando }) => `<div class="comando bloqueado"><code title="${esc(comando)}">$ ${esc(comando)}</code><span class="aviso-sensivel">${esc(quem.nome)} não tem ▶ Executar</span></div>`).join('')}</div>`;
+  }
   return `<div class="comandos">${cmds.map(({ comando, sensivel }) => {
     const s = saidas.get(comando);
     return `<div class="comando ${sensivel ? 'sensivel' : ''}"><code title="${esc(comando)}">$ ${esc(comando)}</code>
@@ -198,7 +211,7 @@ function desenharMensagens() {
       <div class="cab">${esc(a.nome)}<small>${hora(m.em)}</small>${m.erro ? '<span class="selo">falhou</span>' : ''}${m.veredito ? `<span class="selo veredito-${m.veredito}">${ROTULO_VEREDITO[m.veredito]}</span>` : ''}${m.gratis && !m.erro ? `<span class="selo gratis" title="${esc(m.modelo ?? '')}">Gemini grátis</span>` : ''}</div>
       <div class="corpo">${formatar(m.texto)}</div>
       ${m.time ? `<div class="etiquetas">${m.time.map((id) => `<span style="--cor:${ag(id).cor}">${esc(ag(id).nome)}</span>`).join('')}</div>` : ''}
-      ${desenharComandos(m.texto)}</div></div>`;
+      ${desenharComandos(m.texto, m.autor)}</div></div>`;
   }).join('');
   const caixa = $('mensagens');
   caixa.innerHTML = html || '<p class="vazio">Peça algo ao time.<br>Ex.: “Crie uma página de status com um endpoint /health”.</p>';
@@ -324,7 +337,7 @@ async function executar(agente, pedido, anteriores, opcoes = {}) {
   mudarEstado(agente.id, 'trabalhando');
   const modo = provedores.modos[agente.provedor] ?? 'cli';
   const prompt = n.montarPrompt(agente, pedido, anteriores, { modo, proximo: opcoes.proximo });
-  const r = await ponte.executarAgente({ agente: agente.id, provedor: agente.provedor, modelo: agente.modelo, prompt, pasta, escrita: n.podeEscrever(agente) });
+  const r = await ponte.executarAgente({ agente: agente.id, provedor: agente.provedor, modelo: agente.modelo, prompt, pasta, escrita: n.podeEscrever(agente), ferramentas: n.ferramentasDo(agente) });
   const erro = !r.ok || !r.saida;
   const texto = erro
     ? `${agente.provedor} falhou: ${(r.erro || r.saida || 'sem resposta').trim().split('\n').slice(-3).join('\n')}`
@@ -646,7 +659,8 @@ $('btn-novo-agente').addEventListener('click', () => { $('erro-agente').textCont
 $('form-agente').addEventListener('submit', (ev) => {
   if (ev.submitter?.value !== 'criar') return;
   try {
-    agentes = n.criarAgente(agentes, Object.fromEntries(new FormData(ev.target)));
+    const dados = new FormData(ev.target);
+    agentes = n.criarAgente(agentes, { ...Object.fromEntries(dados), ferramentas: dados.getAll('ferramenta') });
     estados = { ...estados, [agentes.at(-1).id]: 'disponivel' };
     persistir(); desenhar();
   } catch (e) {
@@ -835,6 +849,10 @@ $('palco').addEventListener('dblclick', async (ev) => {
   $('editar-papel').textContent = `${a.papel}${a.coordenador ? ' · só responde quando você fala direto com ele' : ''}`;
   f.provedor.value = a.provedor;
   f.modelo.value = a.modelo ?? '';
+  const tem = n.ferramentasDo(a);
+  $('editar-ferramentas').querySelectorAll('input').forEach((c) => { c.checked = tem.includes(c.value); c.disabled = Boolean(a.coordenador); });
+  $('editar-ferramentas').querySelector('legend').textContent = a.coordenador
+    ? 'Ferramentas: nenhuma (o líder não executa)' : 'Ferramentas (a lista é a permissão)';
   f.modelo.placeholder = n.CATALOGO[a.provedor]?.modelo ?? '';
   $('editar-acesso').textContent = acessoDoAgente(a.provedor);
   mostrar($('editar-resultado'), '', '');
@@ -849,7 +867,9 @@ $('form-editar').provedor.addEventListener('change', (ev) => {
 $('form-editar').addEventListener('submit', (ev) => {
   if (ev.submitter?.value !== 'salvar') return;
   try {
-    agentes = n.editarAgente(agentes, editando, Object.fromEntries(new FormData(ev.target)));
+    const dados = new FormData(ev.target);
+    const alvo = agentes.find((x) => x.id === editando);
+    agentes = n.editarAgente(agentes, editando, { ...Object.fromEntries(dados), ...(alvo?.coordenador ? {} : { ferramentas: dados.getAll('ferramenta') }) });
     persistir(); desenhar();
   } catch (e) {
     ev.preventDefault();
