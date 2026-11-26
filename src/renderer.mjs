@@ -198,6 +198,17 @@ function desenharMensagens() {
         <p><b>${ROTULO_PORTAO[m.situacao] ?? esc(m.situacao)}</b>${cmd}${origem}${tempo}</p>${caixa}${motivo}${det}</div>`;
     }
     if (m.tipo === 'decisao') return desenharDecisao(m);
+    if (m.tipo === 'caso') {
+      const c = n.CASOS_AULA17[m.caso];
+      if (!c) return '';
+      const time = c.agentes().filter((a) => !a.coordenador || n.ARQUITETURAS[c.arquitetura].lider)
+        .map((a) => `<li><b>${esc(a.nome)}</b> · ${esc(a.papel)} · ${n.ferramentasDo(a).map((f) => n.FERRAMENTAS[f].icone).join(' ') || 'sem ferramentas'}${n.ehRevisor(a) ? ' · <i>juiz</i>' : ''}</li>`).join('');
+      return `<div class="rodada caso"><h3>${esc(c.titulo)}</h3>
+        <p><b>Arquitetura:</b> ${esc(n.ARQUITETURAS[c.arquitetura].nome)}. ${esc(c.porque)}</p>
+        <p><b>Time montado:</b></p><ul>${time}</ul>
+        <p><b>Onde fica o juiz:</b> ${esc(c.juiz)}</p>
+        <p class="nota">O pedido do caso já está na caixa de texto. Com o 🎬 ligado, roda sem custo.</p></div>`;
+    }
     if (m.tipo === 'sugestao') {
       const S = n.ARQUITETURAS[m.sugestao]; const A = n.ARQUITETURAS[m.atual];
       return `<div class="rodada sugestao"><h3>Qual usar, e quando</h3><p>O tipo da tarefa sugere <b>${esc(S.nome)}</b>: ${esc(m.motivo.toLowerCase())}. Este pedido roda em <b>${esc(A?.nome ?? m.atual)}</b>, como está escolhido.</p>
@@ -429,8 +440,9 @@ async function executarComPortao(ids, pedido, anteriores, ciclo, extra = null, o
 
 function avisarDevolucao(corretores, motivo) {
   const nomes = corretores.map((id) => agentes.find((a) => a.id === id)?.nome).join(' e ');
-  const maestro = agentes.find((a) => a.coordenador);
-  if (maestro) { postar({ autor: maestro.id, texto: `Voltou para ${nomes}: ${motivo}.` }); falar(maestro.id, `Voltou para ${nomes}.`); }
+  const lider = n.ARQUITETURAS[arquitetura]?.lider && agentes.find((a) => a.coordenador); // sem líder, quem avisa é o Estúdio
+  if (lider) { postar({ autor: lider.id, texto: `Voltou para ${nomes}: ${motivo}.` }); falar(lider.id, `Voltou para ${nomes}.`); }
+  else postar({ autor: 'sistema', texto: `Voltou para ${nomes}: ${motivo}.` });
 }
 
 // Marca o veredito na última mensagem do agente (selo "aprovou" / "devolveu" no chat).
@@ -460,7 +472,7 @@ async function revisarComDevolucao(ids, pedido, anteriores, ciclo) {
     }
     const v = { achados: devolvidos.flatMap((d) => d.achados), texto: devolvidos.map((d) => d.texto).join('\n\n') };
     const corretores = n.quemCorrige(v.achados.join('\n') || v.texto, ciclo.autoria, ciclo.executores);
-    avisarDevolucao(corretores, 'o Revisor devolveu');
+    avisarDevolucao(corretores, `${devolvidos.map((d) => agentes.find((a) => a.id === d.id)?.nome ?? d.id).join(' e ')} devolveu`);
     marcarPasso('execucao');
     await executarComPortao(corretores, pedido, anteriores, ciclo, n.falhaDaRevisao(v, rodada));
   }
@@ -809,11 +821,38 @@ function desenharDialogoTime() {
     + colunas.map((ids, i) => `<div class="coluna" data-coluna="${i}"><h4>Etapa ${i + 1}</h4>${ids.map((id) => time.find((a) => a.id === id)).filter(Boolean).map(chip).join('')}</div>`).join('');
 }
 
+// R51: carregar o time de um caso da Aula 17 (ou voltar ao time padrão).
+function carregarCaso(id) {
+  if (id === 'padrao') {
+    agentes = n.TIME_PADRAO.map((a) => ({ ...a }));
+    arquitetura = 'supervisor';
+    postar({ autor: 'sistema', texto: '🏗 Voltou o time padrão (Supervisor).' });
+  } else {
+    const c = n.montarCaso(id);
+    agentes = c.agentes; arquitetura = c.arquitetura;
+    if (Object.keys(c.ligacoes).length) ligacoes = c.ligacoes;
+    postar({ autor: 'sistema', tipo: 'caso', caso: id });
+    $('entrada').value = c.pedido;
+  }
+  estados = Object.fromEntries(agentes.map((a) => [a.id, 'disponivel']));
+  destino = 'time';
+  persistir(); desenhar();
+}
+
 $('btn-time').addEventListener('click', () => {
   if (ocupado) return;
+  $('lista-casos').innerHTML = Object.entries(n.CASOS_AULA17).map(([id, c]) => `<button type="button" data-caso="${id}" title="${esc(c.porque)}">${esc(c.titulo)}<small>${esc(n.ARQUITETURAS[c.arquitetura].nome)}</small></button>`).join('')
+    + '<button type="button" data-caso="padrao">Time padrão<small>Supervisor</small></button>';
   rascunho = { arquitetura, ligacoes: clonar(ligacoes), etapas: clonar(etapasConstrutor) };
   desenharDialogoTime();
   $('dlg-time').showModal();
+});
+$('lista-casos').addEventListener('click', (ev) => {
+  const b = ev.target.closest('[data-caso]');
+  if (!b) return;
+  carregarCaso(b.dataset.caso);
+  $('dlg-time').close();
+  $('entrada').focus();
 });
 $('lista-arquiteturas').addEventListener('change', (ev) => {
   if (ev.target.name === 'arq') { rascunho.arquitetura = ev.target.value; desenharDialogoTime(); }

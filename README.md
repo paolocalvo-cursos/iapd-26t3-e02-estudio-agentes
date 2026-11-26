@@ -225,7 +225,8 @@ Abra o app pelo terminal (`npm start`). Assim ele herda o `PATH` onde as CLIs fo
 
 | Arquivo | Papel |
 |---|---|
-| `docs/regras.md` | As regras R1–R50, com entrada, saída e origem. |
+| `docs/regras.md` | As regras R1–R52, com entrada, saída e origem. |
+| `docs/casos-aula17.md` | Casos 2 a 6 da Aula 17: arquitetura, time montado (com capturas) e onde fica o juiz. |
 | `.env.example` | Modelo do `.env`: modo gratuito, chaves e modelos de cada IA. |
 | `src/nucleo.mjs` | **Todas as regras.** Funções puras, sem DOM, Electron nem rede. |
 | `src/renderer.mjs` | Tela: mascotes em SVG, palco, rodada de propostas, chat. |
@@ -239,6 +240,7 @@ Abra o app pelo terminal (`npm start`). Assim ele herda o `PATH` onde as CLIs fo
 | `test/arquiteturas.test.mjs` | Testes dos 8 modelos de time, da rede e da sugestão "qual usar". |
 | `test/ferramentas.test.mjs` | Testes das ferramentas por agente e das flags de cada CLI. |
 | `test/camadas.test.mjs` | Testes das 4 camadas do prompt e da memória longa. |
+| `test/casos.test.mjs` | Testes dos times dos casos da Aula 17. |
 
 ## Fora do escopo (citado no post)
 

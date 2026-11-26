@@ -127,8 +127,9 @@ export function montarTime(agentes, propostas) {
     const melhor = propostas.map((p) => porId.get(p.id)).find((a) => a && !a.coordenador);
     if (melhor) aceitos.push(melhor);
   }
-  const ehPesquisa = (a) => a.papel === 'Pesquisa';
-  const ehRevisao = (a) => a.papel === 'Revisão de código';
+  // R52: quem só lê (pesquisa, auditoria, defesa) roda antes de quem escreve; o verificador fecha.
+  const ehPesquisa = (a) => !podeEscrever(a) && !ehRevisor(a);
+  const ehRevisao = ehRevisor;
   const pesquisa = aceitos.filter(ehPesquisa);
   const execucao = aceitos.filter((a) => !ehPesquisa(a) && !ehRevisao(a));
   let revisao = aceitos.filter(ehRevisao);
@@ -144,7 +145,7 @@ export function mensagemDoMaestro(etapas, porId) {
   if (!etapas.length) return 'Ninguém do time cobre isso. Reformula o pedido?';
   const partes = [];
   const revisor = etapas.length > 1 ? etapas[etapas.length - 1] : null;
-  const ehRevisao = revisor && revisor.every((id) => porId.get(id)?.papel === 'Revisão de código');
+  const ehRevisao = revisor && revisor.every((id) => ehRevisor(porId.get(id)));
   const meio = ehRevisao ? etapas.slice(0, -1) : etapas;
   meio.forEach((ids, i) => partes.push(i === 0 ? `Fica com ${lista(ids)}.` : `Depois, ${lista(ids)}.`));
   if (ehRevisao) partes.push(`${lista(revisor)}, acompanha no final.`);
@@ -664,8 +665,9 @@ export const INSTRUCAO_VEREDITO = 'Termine com uma linha "VEREDITO: APROVADO" ou
   + 'Se devolver, liste embaixo cada problema numa linha começando com "- " e citando o arquivo (ex.: "- server.js: 404 sem corpo"). '
   + 'Devolva só o que impede a entrega; o resto é observação e não volta.';
 
+// O Revisor do time padrão, ou qualquer agente marcado como verificador (o juiz de um caso).
 export function ehRevisor(agente) {
-  return agente?.papel === 'Revisão de código';
+  return agente?.papel === 'Revisão de código' || agente?.verifica === true;
 }
 
 export function lerVeredito(texto) {
@@ -712,7 +714,7 @@ export const ARQUITETURAS = Object.freeze({
 export const MAX_PASSOS_REDE = 6;
 export const MAX_VISITAS_REDE = 2;
 
-const ehPesquisa = (a) => a?.papel === 'Pesquisa';
+const ehPesquisa = (a) => Boolean(a) && !a.coordenador && !podeEscrever(a) && !ehRevisor(a);
 const nomeDe = (agentes, id) => agentes.find((a) => a.id === id)?.nome ?? id;
 const listaDeNomes = (agentes, ids) => ids.map((id) => nomeDe(agentes, id)).join(ids.length > 2 ? ', ' : ' e ').replace(/, ([^,]+)$/, ' e $1');
 
@@ -756,7 +758,8 @@ export function montarPlano(arquitetura, agentes, propostas, { ligacoes = {}, et
       etapas[i].forEach((id) => { const p = porId.get(id).papel; areas.set(p, [...(areas.get(p) ?? []), id]); });
       const frentes = [...areas.values()];
       const novas = [...etapas.slice(0, i), { frentes }, ...etapas.slice(i + 1)];
-      const descricao = [...areas.entries()].map(([papel, ids]) => `${papel} (sub-líder: ${nomeDe(agentes, ids[0])})`).join(' e ');
+      const partes = [...areas.entries()].map(([papel, ids]) => `${papel} (sub-líder: ${nomeDe(agentes, ids[0])})`);
+      const descricao = partes.length > 1 ? `${partes.slice(0, -1).join(', ')} e ${partes.at(-1)}` : partes[0];
       const fim = etapas.slice(i + 1).flat();
       return {
         etapas: novas, lider: coordenador,
@@ -925,4 +928,79 @@ export function entradaDeMemoria({ em = Date.now(), pedido = '', arquitetura = '
 export function recortarMemoria(texto, max = MEMORIA_RECENTE) {
   const entradas = String(texto ?? '').split(/^(?=### )/m).filter((e) => e.startsWith('### '));
   return entradas.slice(-max).join('').trim();
+}
+
+// ---------- R51: os casos 2 a 6 da Aula 17, como times prontos ----------
+// Cada caso traz a arquitetura, o time (com ferramentas), o pedido de exemplo e onde fica o juiz.
+const base = (id) => TIME_PADRAO.find((a) => a.id === id);
+const leitor = (id, nome, papel, palavras, cor, extra = {}) => ({ id, nome, papel, provedor: 'claude', forma: 'estrela', cor, palavras, ferramentas: ['ler'], personalidade: 'Objetivo. Cita a fonte de cada afirmação.', ...extra });
+const escritor = (id, nome, papel, palavras, cor, extra = {}) => ({ id, nome, papel, provedor: 'claude', forma: 'bloco', cor, palavras, ferramentas: ['ler', 'escrever'], personalidade: 'Organizado. Entrega o arquivo da sua etapa completo.', ...extra });
+const juiz = (id, nome, papel, palavras = []) => ({ id, nome, papel, provedor: 'codex', forma: 'nuvem', cor: '#3f7bf2', palavras, ferramentas: ['ler'], verifica: true, personalidade: 'Cético. Confere contra o critério combinado, não contra o próprio gosto.' });
+
+export const CASOS_AULA17 = Object.freeze({
+  caso2: {
+    titulo: 'Caso 2 · Auditoria de segurança em 20 repositórios',
+    arquitetura: 'supervisor',
+    porque: 'Partes independentes e paralelizáveis, com um relatório único: líder central (+80,8% em tarefa paralelizável; erro ampliado de 4,4x contra 17,2x sem coordenação).',
+    juiz: 'Fora dos auditores: um scanner (SAST, npm audit, trivy) roda em cada repositório como portão, sem perguntar a ninguém. O Revisor só aceita achado com arquivo:linha. Os auditores só leem: conteúdo de fora pode trazer prompt injection.',
+    pedido: 'Faça a auditoria de segurança dos 20 repositórios, um lote por auditor, e entregue à diretoria um relatório único com prioridades.',
+    agentes: () => [base('maestro'),
+      leitor('auditor-a', 'Auditor A', 'Auditoria de segurança', ['auditoria', 'seguranca', 'repositorio', 'vulnerab'], '#c0504d'),
+      leitor('auditor-b', 'Auditor B', 'Auditoria de segurança', ['auditoria', 'seguranca', 'repositorio', 'vulnerab'], '#d9822b'),
+      leitor('auditor-c', 'Auditor C', 'Auditoria de segurança', ['auditoria', 'seguranca', 'repositorio', 'vulnerab'], '#b5a642'),
+      escritor('relator', 'Relator', 'Relatório', ['relatorio', 'prioridade', 'diretoria'], '#5fb3a1'),
+      juiz('revisor', 'Revisor', 'Revisão dos achados')],
+  },
+  caso3: {
+    titulo: 'Caso 3 · App de reserva de salas, do zero',
+    arquitetura: 'hierarquica',
+    porque: 'Grande, com frentes que têm dono (back-end, front-end e banco), decisões próprias e muitos arquivos.',
+    juiz: 'Um portão de testes por frente (cada frente com o próprio teste) e um teste de integração antes do Revisor. A cada entrega parcial, você decide no passo 5 (Manter/Descartar). Contra o recado perdido: contrato de API em docs/.',
+    pedido: 'Crie o app de reserva de salas: API de reservas no back-end, tela de agendamento no front-end e banco de dados com as tabelas de salas e reservas.',
+    agentes: () => [base('maestro'),
+      { ...base('chevron'), palavras: ['api', 'endpoint', 'rota', 'servidor', 'back', 'backend', 'reserva'] },
+      { ...base('pixel'), palavras: ['tela', 'front', 'agendamento', 'interface', 'formulario'] },
+      escritor('dora', 'Dora', 'Banco de dados', ['banco', 'tabela', 'tabelas', 'sql', 'migracao', 'dados'], '#8e6bbf', { forma: 'bloco' }),
+      base('revisor')],
+  },
+  caso4: {
+    titulo: 'Caso 4 · Plano de aula a partir da ementa',
+    arquitetura: 'esteira',
+    porque: 'Processo conhecido, sempre na mesma ordem, e cada etapa usa o que a anterior produziu.',
+    juiz: 'O Conferente fica fora da esteira e só lê: monta a tabela objetivo × atividade e devolve se algum objetivo ficou sem atividade. Contra o erro no início da fila, ele também olha os objetivos antes de aprovar.',
+    pedido: 'Monte o plano de aula a partir da ementa do curso: objetivos, conteúdo, atividades e avaliação, nessa ordem.',
+    agentes: () => [base('maestro'),
+      escritor('objetivos', 'Objetivos', 'Objetivos de aprendizagem', ['objetivo', 'objetivos', 'ementa'], '#e2795b'),
+      escritor('conteudo', 'Conteúdo', 'Conteúdo', ['conteudo'], '#e7b866'),
+      escritor('atividades', 'Atividades', 'Atividades', ['atividade', 'atividades'], '#5fb3a1'),
+      escritor('avaliacao', 'Avaliação', 'Avaliação', ['avaliacao'], '#9a7cf0'),
+      juiz('conferente', 'Conferente', 'Conferência objetivo × atividade', ['plano'])],
+  },
+  caso5: {
+    titulo: 'Caso 5 · Como guardar os dados da matrícula',
+    arquitetura: 'rede-escolhida',
+    porque: 'Exploratória, sem caminho definido: três propostas, cada uma ganha num critério. As ligações limitam as voltas.',
+    juiz: 'Você. Não existe teste que diga qual é a certa: os critérios (custo, desempenho, facilidade) e os pesos são combinados antes; o Avaliador só compara, depois de ouvir as três defesas. Ligações: cada defensor passa ao próximo ou ao Avaliador; a rede para em 6 passos.',
+    pedido: 'Compare as três propostas para guardar os dados do novo sistema de matrícula (banco relacional, documentos ou planilha integrada) por custo, desempenho e facilidade.',
+    ligacoes: { relacional: ['documentos', 'avaliador'], documentos: ['planilha', 'avaliador'], planilha: ['avaliador'], avaliador: ['relacional', 'documentos', 'planilha'] },
+    agentes: () => [base('maestro'),
+      leitor('relacional', 'Rel', 'Defesa: banco relacional', ['relacional', 'banco', 'sql'], '#e2795b'),
+      leitor('documentos', 'Doc', 'Defesa: documentos', ['documento', 'documentos', 'nosql', 'json'], '#5fb3a1'),
+      leitor('planilha', 'Plan', 'Defesa: planilha integrada', ['planilha', 'integrada'], '#e7b866'),
+      juiz('avaliador', 'Avaliador', 'Avaliação por critérios', ['comparativo'])],
+  },
+  caso6: {
+    titulo: 'Caso 6 · Corrigir uma mensagem de erro',
+    arquitetura: 'unico',
+    porque: 'Uma linha num arquivo, texto já aprovado: tarefa pequena e sequencial. Multiagente aqui só piora (−39% a −70%).',
+    juiz: 'O teste que já cobre a mensagem, rodado pelo portão depois da edição. Depois, você lê o diff de uma linha.',
+    pedido: 'Corrija a mensagem de erro do endpoint /health em server.js para o texto novo, já aprovado.',
+    agentes: () => TIME_PADRAO.map((a) => ({ ...a })),
+  },
+});
+
+export function montarCaso(id) {
+  const c = CASOS_AULA17[id];
+  if (!c) throw new Error(`Caso desconhecido: ${id}`);
+  return { id, ...c, agentes: c.agentes().map((a) => ({ ...a, palavras: [...(a.palavras ?? [])] })), ligacoes: c.ligacoes ?? {}, etapasConstrutor: [] };
 }
